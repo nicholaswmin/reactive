@@ -1,0 +1,1124 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width">
+<title>reactive</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --fg:     light-dark(#1a1a1a, #e4e4e4);
+    --bg:     light-dark(#fdfdfd, #141414);
+    --muted:  light-dark(#666, #888);
+    --panel:  light-dark(#f4f4f4, #1e1e1e);
+    --border: light-dark(#ddd, #2a2a2a);
+    --accent: light-dark(#0b57d0, #8ab4f8);
+    --shadow:
+      0 1px 3px light-dark(rgba(0,0,0,.08), rgba(0,0,0,.5)),
+      0 0 0 1px light-dark(rgba(0,0,0,.03), rgba(255,255,255,.04));
+    --radius: 0.5rem;
+    --space: 1.5rem;
+    --font-ui: ui-rounded, system-ui, sans-serif;
+  }
+
+  * {
+    margin: 0;
+    box-sizing: border-box;
+  }
+
+  html {
+    font: 1rem / 1.6 var(--font-ui);
+    color: var(--fg);
+    background: var(--bg);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  main {
+    max-inline-size: 90ch;
+    margin-inline: auto;
+    padding: var(--space);
+
+    & > header {
+      margin-block-end: var(--space);
+    }
+  }
+
+  h1 {
+    font-size: 1.25rem;
+    font-weight: 400;
+    line-height: 1.4;
+    margin-block-end: 0.25rem;
+  }
+
+  p {
+    font-size: 0.875rem;
+    color: var(--muted);
+  }
+
+  section[aria-label='Replicas'] {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(30ch, 1fr));
+    gap: var(--space);
+  }
+
+  log-view {
+    max-inline-size: 84ch;
+    margin-inline: auto;
+    margin-block-start: var(--space);
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>reactive</h1>
+    <p>Replicated domain objects. Local-first, eventually consistent.</p>
+  </header>
+  <section aria-label="Replicas">
+    <json-editor id="foo" label="Foo"></json-editor>
+    <json-editor id="bar" label="Bar"></json-editor>
+  </section>
+  <log-view id="log" aria-label="Transport log"></log-view>
+</main>
+<script type="module">
+import { html, render } from 'https://esm.run/lit-html'
+import { unsafeSVG } from 'https://cdn.jsdelivr.net/npm/lit-html/directives/unsafe-svg.js/+esm'
+import { Reactive } from './src/index.js'
+
+const iconSources = {
+  apply: `<svg viewBox="0 0 9.6 9.3" fill="currentColor"><path d="M3.39 9.31c.2 0 .35-.09.46-.26L9 1.02A.47.47 0 0 0 9.09.67C9.09.42 8.92.24 8.66.24c-.18 0-.29.06-.4.24L3.36 8.24.85 5.03a.5.5 0 0 0-.4-.23C.19 4.8 0 4.98 0 5.24c0 .11.05.23.14.34l2.76 3.46c.14.18.28.27.49.27"/></svg>`,
+  arrow: `<svg viewBox="0 0 6.3168 7.19785" fill="currentColor"><path d="M2.8752 7.19785C2.9584 7.19785 3.03369 7.16265 3.09702 7.09595L5.65859 4.53706C5.72192 4.46851 5.75039 4.39844 5.75039 4.3186C5.75039 4.15371 5.6271 4.02519 5.46187 4.02519C5.38203 4.02519 5.3022 4.05518 5.252 4.10537L4.23286 5.11103L2.87183 6.58476L1.51753 5.11103L0.499904 4.10537C0.448194 4.05518 0.36836 4.02519 0.29004 4.02519C0.123291 4.02519 0 4.15371 0 4.3186C0 4.39844 0.0299805 4.46851 0.0933108 4.53706L2.65337 7.09595C2.7167 7.16265 2.79351 7.19785 2.8752 7.19785ZM2.8752 6.82783C3.03184 6.82783 3.13862 6.71802 3.13862 6.56138L3.17534 5.47524L3.17534 0.295264C3.17534 0.123291 3.04868 0 2.8752 0C2.70171 0 2.57656 0.123291 2.57656 0.295264L2.57656 5.47524L2.61177 6.5644C2.61177 6.71802 2.72007 6.82783 2.8752 6.82783Z"/></svg>`,
+  minus: `<svg viewBox="0 0 8.04287 0.733478" fill="currentColor"><path d="M0.361993 0.733478L7.14586 0.733478C7.33969 0.733478 7.50381 0.56754 7.50381 0.371485C7.50381 0.17543 7.33969 0.00949216 7.14586 0.00949216L0.361993 0.00949216C0.164122 0.00949216 0 0.17543 0 0.371485C0 0.56754 0.164122 0.733478 0.361993 0.733478Z"/></svg>`,
+  plus: `<svg viewBox="0 0 8.04287 8.04287" fill="currentColor"><path d="M0.361993 0.733478L7.14586 0.733478C7.33969 0.733478 7.50381 0.56754 7.50381 0.371485C7.50381 0.17543 7.33969 0.00949216 7.14586 0.00949216L0.361993 0.00949216C0.164122 0.00949216 0 0.17543 0 0.371485C0 0.56754 0.164122 0.733478 0.361993 0.733478Z" transform="translate(0 3.654696)"/><path d="M0.361993 0.733478L7.14586 0.733478C7.33969 0.733478 7.50381 0.56754 7.50381 0.371485C7.50381 0.17543 7.33969 0.00949216 7.14586 0.00949216L0.361993 0.00949216C0.164122 0.00949216 0 0.17543 0 0.371485C0 0.56754 0.164122 0.733478 0.361993 0.733478Z" transform="translate(4.388174 0.269) rotate(90)"/></svg>`,
+  wifi: `<svg viewBox="0 0 10.9037 7.46556" fill="currentColor"><path d="M0.615167 3.03493C0.690402 3.11181 0.79306 3.11181 0.869935 3.02907C1.98814 1.85321 3.49587 1.2136 5.17939 1.2136C6.86618 1.2136 8.39665 1.83798 9.49376 3.03071C9.56735 3.11017 9.66837 3.10853 9.74525 3.03165L10.3129 2.46985C10.3823 2.39883 10.3806 2.31024 10.3204 2.23664C9.25494 0.934456 7.22595 0.00585938 5.17939 0.00585938C3.13868 0.00585938 1.10126 0.930237 0.0425847 2.23664C-0.0176499 2.31024-0.0134313 2.39883 0.0517257 2.46985Z" opacity="0.85"/><path d="M2.5279 4.95517C2.6022 5.0311 2.699 5.02618 2.78173 4.93759C3.35032 4.31978 4.2747 3.89134 5.17939 3.8972C6.08736 3.89134 7.01009 4.3247 7.5836 4.94251C7.66306 5.02946 7.75657 5.02782 7.83673 4.95353L8.48478 4.31719C8.5483 4.25368 8.55416 4.16766 8.49814 4.09664C7.82455 3.26391 6.53713 2.68359 5.17939 2.68359C3.82587 2.68359 2.54266 3.26813 1.86649 4.09664C1.80883 4.16766 1.81305 4.2504 1.87985 4.31719Z" opacity="0.85"/><path d="M5.17939 7.46556C5.25697 7.46556 5.32798 7.4229 5.49017 7.27079L6.57884 6.22055C6.6365 6.16712 6.64986 6.09633 6.59385 6.01852C6.3297 5.6707 5.76978 5.36719 5.17939 5.36719C4.58665 5.36719 4.02251 5.67563 3.76001 6.02836C3.71313 6.1029 3.72391 6.16712 3.78321 6.22055L4.87282 7.27079C5.03501 7.42126 5.10345 7.46556 5.17939 7.46556Z" opacity="0.85"/></svg>`,
+  wifiSlash: `<svg viewBox="0 0 10.9037 7.46556" fill="currentColor"><path d="M0.615167 3.03493C0.690402 3.11181 0.79306 3.11181 0.869935 3.02907C1.98814 1.85321 3.49587 1.2136 5.17939 1.2136C6.86618 1.2136 8.39665 1.83798 9.49376 3.03071C9.56735 3.11017 9.66837 3.10853 9.74525 3.03165L10.3129 2.46985C10.3823 2.39883 10.3806 2.31024 10.3204 2.23664C9.25494 0.934456 7.22595 0.00585938 5.17939 0.00585938C3.13868 0.00585938 1.10126 0.930237 0.0425847 2.23664C-0.0176499 2.31024-0.0134313 2.39883 0.0517257 2.46985Z" opacity="0.85"/><path d="M2.5279 4.95517C2.6022 5.0311 2.699 5.02618 2.78173 4.93759C3.35032 4.31978 4.2747 3.89134 5.17939 3.8972C6.08736 3.89134 7.01009 4.3247 7.5836 4.94251C7.66306 5.02946 7.75657 5.02782 7.83673 4.95353L8.48478 4.31719C8.5483 4.25368 8.55416 4.16766 8.49814 4.09664C7.82455 3.26391 6.53713 2.68359 5.17939 2.68359C3.82587 2.68359 2.54266 3.26813 1.86649 4.09664C1.80883 4.16766 1.81305 4.2504 1.87985 4.31719Z" opacity="0.85"/><path d="M5.17939 7.46556C5.25697 7.46556 5.32798 7.4229 5.49017 7.27079L6.57884 6.22055C6.6365 6.16712 6.64986 6.09633 6.59385 6.01852C6.3297 5.6707 5.76978 5.36719 5.17939 5.36719C4.58665 5.36719 4.02251 5.67563 3.76001 6.02836C3.71313 6.1029 3.72391 6.16712 3.78321 6.22055L4.87282 7.27079C5.03501 7.42126 5.10345 7.46556 5.17939 7.46556Z" opacity="0.85"/><path d="M1.1 7L9.75 0.55" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="0.9" opacity="0.85"/></svg>`,
+  server: `<svg viewBox="0 0 11.2141 8.17431" fill="currentColor"><path d="M8.59617 2.07142C8.8821 2.06556 9.11789 1.82977 9.11789 1.54384C9.11789 1.25368 8.8821 1.01039 8.59617 1.01039C8.31187 1.01039 8.06437 1.25368 8.06437 1.54384C8.06437 1.82977 8.31187 2.07728 8.59617 2.07142ZM8.59617 4.61439C8.8821 4.60853 9.11789 4.37274 9.11789 4.0868C9.11789 3.79665 8.8821 3.55336 8.59617 3.55336C8.31187 3.55336 8.06437 3.79665 8.06437 4.0868C8.06437 4.37274 8.31187 4.62024 8.59617 4.61439ZM8.59617 7.15735C8.8821 7.15149 9.11789 6.91571 9.11789 6.62977C9.11789 6.33961 8.8821 6.09633 8.59617 6.09633C8.31187 6.09633 8.06437 6.33961 8.06437 6.62977C8.06437 6.91571 8.31187 7.16321 8.59617 7.15735ZM10.4754 2.99181L10.4754 2.61L0.243525 2.61L0.243525 2.99181ZM10.4754 5.57861L10.4754 5.19679L0.243525 5.19679L0.243525 5.57861ZM1.26634 8.17173L9.40875 8.17173C10.242 8.17173 10.6751 7.73017 10.6751 6.91032L10.6751 1.26142C10.6751 0.441565 10.242 0 9.40875 0L1.26634 0C0.434768 0 0 0.433127 0 1.26142L0 6.91032C0 7.73861 0.434768 8.17173 1.26634 8.17173ZM1.27806 7.77351C0.700094 7.77351 0.396581 7.47328 0.396581 6.8904L0.396581 1.28134C0.396581 0.696812 0.700094 0.398221 1.27806 0.398221L9.39703 0.398221C9.95812 0.398221 10.2785 0.696812 10.2785 1.28134L10.2785 6.8904C10.2785 7.47328 9.95812 7.77351 9.39703 7.77351Z" opacity="0.85"/></svg>`,
+  command: `<svg viewBox="0 0 11.8718 9.5073" fill="currentColor"><path d="M0 4.75072C0 4.9882 0.137637 5.16018 0.435704 5.20787C1.02059 5.29436 1.26521 5.58691 1.26521 6.34313L1.26521 7.69629C1.26521 8.92881 1.80334 9.5073 3.01852 9.5073C3.08279 9.5073 3.14707 9.49518 3.19699 9.479C3.32795 9.4323 3.39727 9.3266 3.39727 9.18756C3.39727 9.03416 3.32795 8.94463 3.18082 8.91228C3.13899 8.9042 3.10301 8.89611 3.05309 8.89207C2.26635 8.84941 1.96676 8.50072 1.96676 7.61906L1.96676 6.04102C1.96676 5.25668 1.53686 4.8249 0.827463 4.7683C0.808068 4.7683 0.808068 4.74932 0.827463 4.74932C1.53686 4.69271 1.96676 4.26094 1.96676 3.4766L1.96676 1.89047C1.96676 1.00881 2.26635 0.668205 3.05309 0.625548C3.11514 0.621505 3.17133 0.613419 3.20912 0.597247C3.33422 0.560861 3.39727 0.467286 3.39727 0.321973C3.39727 0.178887 3.32391 0.0772269 3.18082 0.0345705C3.11877 0.0143555 3.05854 0.00626957 2.98213 0.00626957C1.7993 0.00626957 1.26521 0.588809 1.26521 1.82133L1.26521 3.17449C1.26521 3.92666 1.02059 4.21922 0.435704 4.3057C0.137637 4.3534 0 4.52133 0 4.75072ZM11.3327 4.75072C11.3327 4.52133 11.1951 4.3534 10.897 4.3057C10.3122 4.21922 10.0635 3.92666 10.0635 3.17449L10.0635 1.82133C10.0635 0.588809 9.52758 0.00626957 8.35061 0.00626957C8.26834 0.00626957 8.20811 0.0143555 8.15192 0.0345705C8.00883 0.0772269 7.92961 0.178887 7.92961 0.321973C7.92961 0.467286 7.9967 0.560861 8.11957 0.597247C8.16141 0.613419 8.21174 0.621505 8.27783 0.625548C9.06235 0.668205 9.36598 1.00881 9.36598 1.89047L9.36598 3.4766C9.36598 4.26094 9.79184 4.69271 10.5053 4.74932C10.5206 4.74932 10.5206 4.7683 10.5053 4.7683C9.79184 4.8249 9.36598 5.25668 9.36598 6.04102L9.36598 7.61906C9.36598 8.50072 9.06235 8.84941 8.27783 8.89207C8.22791 8.89611 8.18971 8.9042 8.15192 8.91228C8.00479 8.94463 7.92961 9.03416 7.92961 9.18756C7.92961 9.3266 8.00479 9.4323 8.13574 9.479C8.18162 9.49518 8.24813 9.5073 8.31018 9.5073C9.52354 9.5073 10.0635 8.92881 10.0635 7.69629L10.0635 6.34313C10.0635 5.58691 10.3122 5.29436 10.897 5.20787C11.1951 5.16018 11.3327 4.9882 11.3327 4.75072Z"/><path d="M7.78699 5.38764C8.14061 5.38764 8.42977 5.10252 8.42977 4.74891C8.42977 4.39529 8.14061 4.11018 7.78699 4.11018C7.43338 4.11018 7.14826 4.39529 7.14826 4.74891C7.14826 5.10252 7.43338 5.38764 7.78699 5.38764Z"/><path d="M5.65799 5.38764C6.0116 5.38764 6.30258 5.10252 6.30258 4.74891C6.30258 4.39529 6.0116 4.11018 5.65799 4.11018C5.30619 4.11018 5.01926 4.39529 5.01926 4.74891C5.01926 5.10252 5.30619 5.38764 5.65799 5.38764Z"/><path d="M3.5308 5.38764C3.8826 5.38764 4.16953 5.10252 4.16953 4.74891C4.16953 4.39529 3.87856 4.11018 3.5308 4.11018C3.17719 4.11018 2.89026 4.39529 2.89026 4.74891C2.89026 5.10252 3.17719 5.38764 3.5308 5.38764Z"/></svg>`,
+  edit: `<svg viewBox="0 0 9.20086 8.67129" fill="currentColor"><path d="M1.60857 8.64926C2.49621 8.64926 3.21715 7.9265 3.21715 7.03482L3.21715 1.61443C3.21715 0.722754 2.49621 0 1.60857 0C0.722754 0 0 0.722754 0 1.61443C0 2.50793 0.722754 3.21451 1.60857 3.21451L2.90367 3.21451C3.07324 3.21451 3.20906 3.07688 3.20906 2.90508C3.20906 2.73551 3.07324 2.59969 2.90367 2.59969L1.60857 2.59969C1.07443 2.59969 0.630998 2.15443 0.630998 1.61443C0.630998 1.07625 1.07443 0.635041 1.60857 0.635041C2.14271 0.635041 2.58797 1.07625 2.58797 1.61443L2.58797 7.03482C2.58797 7.57482 2.14271 8.01422 1.60857 8.01422C1.07443 8.01422 0.630998 7.57482 0.630998 7.03482C0.630998 6.49482 1.07443 6.04957 1.60857 6.04957L7.05322 6.04957C7.58555 6.04957 8.0308 6.49482 8.0308 7.03482C8.0308 7.57482 7.58555 8.01422 7.05322 8.01422C6.51908 8.01422 6.07787 7.57482 6.07787 7.03482L6.07787 1.61443C6.07787 1.07625 6.51908 0.635041 7.05322 0.635041C7.58555 0.635041 8.0308 1.07625 8.0308 1.61443C8.0308 2.15443 7.58555 2.59969 7.05322 2.59969L2.90367 2.59969C2.73187 2.59969 2.59605 2.73551 2.59605 2.90508C2.59605 3.07688 2.73187 3.21451 2.90367 3.21451L7.05322 3.21451C7.93904 3.21451 8.6618 2.50793 8.6618 1.61443C8.6618 0.722754 7.93904 0 7.05322 0C6.16559 0 5.44283 0.722754 5.44283 1.61443L5.44283 7.03482C5.44283 7.9265 6.16559 8.64926 7.05322 8.64926C7.93904 8.64926 8.6618 7.9265 8.6618 7.03482C8.6618 6.14133 7.93904 5.43879 7.05322 5.43879L1.60857 5.43879C0.722754 5.43879 0 6.14133 0 7.03482C0 7.9265 0.722754 8.64926 1.60857 8.64926Z"/></svg>`
+}
+
+const icons = Object.fromEntries(
+  Object.entries(iconSources).map(([name, source]) => [name, compileIcon(source)])
+)
+
+function compileIcon(source) {
+  const doc = new DOMParser().parseFromString(source, 'image/svg+xml')
+  const svg = doc.documentElement
+  const viewBox = svg.getAttribute('viewBox')
+
+  if (!viewBox)
+    throw new Error('icon is missing a viewBox')
+
+  const [, , width, height] = viewBox.trim().split(/\s+/).map(Number)
+
+  return {
+    viewBox,
+    ratio: `${width} / ${height}`,
+    body: svg.innerHTML
+  }
+}
+
+function icon(name, slot, shape = 'ratio') {
+  const { viewBox, ratio, body } = icons[name]
+
+  return html`
+    <span
+      class="icon"
+      data-slot=${slot}
+      data-shape=${shape}
+      style=${`--icon-ratio:${ratio}`}>
+      <svg
+        viewBox=${viewBox}
+        fill="currentColor"
+        preserveAspectRatio="xMidYMid meet"
+        aria-hidden="true"
+        focusable="false">
+        ${unsafeSVG(body)}
+      </svg>
+    </span>`
+}
+
+class JsonEditor extends HTMLElement {
+  #data = {}
+  #editing = true
+  #error = null
+  #focus = null
+  #root = this.attachShadow({ mode: 'open' })
+
+  get data() { return this.#data }
+
+  set data(value) {
+    this.#data = value
+    this.#editing = false
+    this.render()
+  }
+
+  connectedCallback() {
+    if (!Object.keys(this.#data).length)
+      this.render()
+  }
+
+  #save() {
+    const el = this.#root.querySelector('textarea')
+
+    try {
+      const { id, ...next } = JSON.parse(el.value)
+
+      for (const key of Object.keys(this.#data))
+        if (!(key in next))
+          delete this.#data[key]
+
+      for (const [key, value] of Object.entries(next))
+        this.#data[key] = value
+
+      this.#editing = false
+      this.#error = null
+    } catch {
+      this.#error = 'invalid JSON'
+    }
+
+    this.render()
+  }
+
+  #edit() {
+    this.#editing = true
+    this.#error = null
+    this.render()
+    this.#root.querySelector('textarea')?.focus()
+  }
+
+  #coerce(prev, next) {
+    if (typeof prev === 'boolean')
+      return next === 'true'
+
+    if (typeof prev === 'number') {
+      const value = Number(next)
+
+      return next === '' || Number.isNaN(value) ? prev : value
+    }
+
+    return next
+  }
+
+  #commit(fn) {
+    fn()
+    this.render()
+  }
+
+  #item(key, index) {
+    return [...this.#root.querySelectorAll('[data-item-input]')]
+      .find(el =>
+        el.dataset.key === key &&
+        el.dataset.index === String(index))
+  }
+
+  #focusItem(key, index) {
+    this.#focus = { key, index }
+  }
+
+  #moveFocus(event, key, index, step) {
+    const input = this.#item(key, index + step)
+
+    if (!input)
+      return
+
+    event.preventDefault()
+    input.focus()
+
+    if (
+      event.target.selectionStart == null ||
+      event.target.selectionEnd == null
+    )
+      return
+
+    const start = Math.min(event.target.selectionStart, input.value.length)
+    const end = Math.min(event.target.selectionEnd, input.value.length)
+
+    input.setSelectionRange(start, end)
+  }
+
+  #onArrayKeydown(event, key, index) {
+    if (event.key === 'ArrowUp')
+      return event.shiftKey
+        ? (event.preventDefault(), this.#moveUp(key, index))
+        : this.#moveFocus(event, key, index, -1)
+
+    if (event.key === 'ArrowDown')
+      return event.shiftKey
+        ? (event.preventDefault(), this.#moveDown(key, index))
+        : this.#moveFocus(event, key, index, 1)
+  }
+
+  #set(key, value) {
+    this.#commit(() =>
+      this.#data[key] = this.#coerce(this.#data[key], value))
+  }
+
+  #setItem(key, index, value) {
+    this.#commit(() =>
+      this.#data[key].splice(
+        index,
+        1,
+        this.#coerce(this.#data[key][index], value)
+      ))
+  }
+
+  #addAfter(key, index) {
+    this.#commit(() => this.#data[key].splice(index + 1, 0, ''))
+  }
+
+  #removeItem(key, index) {
+    this.#commit(() => this.#data[key].splice(index, 1))
+  }
+
+  #moveUp(key, index) {
+    if (index < 1) return
+    const arr = this.#data[key]
+
+    this.#focusItem(key, index - 1)
+
+    this.#commit(() =>
+      arr.splice(index - 1, 2, arr[index], arr[index - 1]))
+  }
+
+  #moveDown(key, index) {
+    const arr = this.#data[key]
+
+    if (index >= arr.length - 1) return
+
+    this.#focusItem(key, index + 1)
+
+    this.#commit(() =>
+      arr.splice(index, 2, arr[index + 1], arr[index]))
+  }
+
+  #inputFor(key, value) {
+    if (Array.isArray(value))
+      return this.#arrayFor(key, value)
+
+    if (typeof value === 'boolean')
+      return html`
+        <select
+          aria-label=${key}
+          @change=${e => this.#set(key, e.target.value)}>
+          <option value="true" ?selected=${value}>true</option>
+          <option value="false" ?selected=${!value}>false</option>
+        </select>`
+
+    return html`
+      <input
+        aria-label=${key}
+        inputmode=${typeof value === 'number' ? 'decimal' : 'text'}
+      .value=${String(value)}
+      @input=${e => this.#set(key, e.target.value)}>`
+  }
+
+  #row(key, field) {
+    return html`
+      <tr>
+        <td>${key}</td>
+        <td>${field}</td>
+      </tr>`
+  }
+
+  #arrayFor(key, items) {
+    if (!items.length)
+      return this.#row(key, html`
+        <span>
+            <input
+              data-item-input
+              data-key=${key}
+              data-index="0"
+              aria-label="${key} item 1"
+              placeholder="empty"
+              .value=${''}
+              @keydown=${e => this.#onArrayKeydown(e, key, 0)}
+              @input=${e => {
+                if (!this.#data[key].length)
+                  this.#addAfter(key, -1)
+              this.#setItem(key, 0, e.target.value)
+            }}>
+          <span>
+            <span></span>
+            <span>
+              <button
+                type="button"
+                aria-label="add first ${key} item"
+                @click=${() => this.#addAfter(key, -1)}>+</button>
+            </span>
+          </span>
+        </span>`)
+
+    return items.map((item, i) => html`
+      <tr>
+        <td>${i === 0 ? key : ''}</td>
+        <td>
+          <span>
+            <input
+              data-item-input
+              data-key=${key}
+              data-index=${String(i)}
+              aria-label="${key} item ${i + 1}"
+              inputmode=${typeof item === 'number' ? 'decimal' : 'text'}
+              placeholder="empty"
+              .value=${String(item)}
+              @keydown=${e => this.#onArrayKeydown(e, key, i)}
+              @input=${e => this.#setItem(key, i, e.target.value)}>
+            <span>
+              <span class="stepper">
+                <button
+                  type="button"
+                  ?disabled=${i < 1}
+                  aria-label="move ${key} item ${i + 1} up"
+                  @click=${() => this.#moveUp(key, i)}>
+                  ${icon('arrow', 'array-stepper')}
+                </button>
+                <button
+                  type="button"
+                  ?disabled=${i >= items.length - 1}
+                  aria-label="move ${key} item ${i + 1} down"
+                  @click=${() => this.#moveDown(key, i)}>
+                  ${icon('arrow', 'array-stepper')}
+                </button>
+              </span>
+              <span>
+                <button
+                  type="button"
+                  aria-label="add after ${key} item ${i + 1}"
+                  @click=${() => this.#addAfter(key, i)}>+</button>
+                <button
+                  type="button"
+                  aria-label="remove ${key} item ${i + 1}"
+                  @click=${() => this.#removeItem(key, i)}>×</button>
+              </span>
+            </span>
+          </span>
+        </td>
+      </tr>`)
+  }
+
+  #rows() {
+    return Object.entries(this.#data)
+      .map(([key, value]) =>
+        Array.isArray(value)
+          ? this.#arrayFor(key, value)
+          : this.#row(key, this.#inputFor(key, value)))
+  }
+
+  #headerButton(kind, label, iconName, onclick) {
+    const slot = kind === 'apply'
+      ? 'header-apply'
+      : 'header-command'
+
+    return html`
+      <button
+        data-kind=${kind}
+        aria-label=${label}
+        @click=${onclick}>
+        ${icon(iconName, slot)}
+      </button>`
+  }
+
+  #template() {
+    return html`
+      <style>
+        :host {
+          --row-pad-inline: 2.5ch;
+          --row-pad-block: 1.25ch;
+          --header-action: 5ch;
+          --item-action: 2.5ch;
+          --focus-line: 2px;
+          --ok: light-dark(#34c759, #30d158);
+          --danger: light-dark(#ff3b30, #ff453a);
+          display: block;
+          background: var(--panel);
+          border-radius: var(--radius);
+          box-shadow: var(--shadow);
+          overflow: hidden;
+          min-block-size: 16rem;
+          font: 0.75rem / 1.6 ui-monospace;
+          color: inherit;
+        }
+
+        header {
+          display: flex;
+          align-items: stretch;
+          background: var(--panel);
+          border-block-end: 1px solid var(--border);
+
+          & .title {
+            display: flex;
+            align-items: center;
+            padding: 0.75ch var(--row-pad-inline) 0.75ch 0.8ch;
+            color: light-dark(#111, #efefef);
+            font-size: 1.02em;
+            font-weight: 560;
+            letter-spacing: 0.035em;
+            margin-inline-end: auto;
+          }
+
+          & button {
+            aspect-ratio: 1;
+            inline-size: var(--header-action);
+            font-size: 1.2em;
+            display: grid;
+            place-items: center;
+            padding: 0;
+            color: light-dark(#111, #efefef);
+            border-radius: 0 var(--radius) 0 0;
+            border-inline-start: 1px solid var(--border);
+            &:hover {
+              color: var(--accent);
+              background: var(--border);
+            }
+            &:disabled {
+              opacity: 0.35;
+            }
+            &[data-side='left'] {
+              inline-size: 4.25ch;
+              color: var(--muted);
+              border-radius: var(--radius) 0 0 0;
+              border-inline-start: none;
+            }
+          }
+
+          & .icon {
+            display: grid;
+            place-items: center;
+            flex: none;
+            block-size: var(--icon-block-size);
+
+            &[data-shape='ratio'] {
+              aspect-ratio: var(--icon-ratio);
+            }
+
+            &[data-shape='square'] {
+              inline-size: var(--icon-block-size);
+            }
+
+            &[data-slot='header-status'] {
+              --icon-block-size: 0.7em;
+            }
+
+            &[data-slot='header-command'] {
+              --icon-block-size: 0.76em;
+            }
+
+            &[data-slot='header-apply'] {
+              --icon-block-size: 0.9em;
+            }
+
+            & svg {
+              display: block;
+              inline-size: 100%;
+              block-size: 100%;
+            }
+          }
+        }
+
+        input,
+        select {
+          all: unset;
+          display: block;
+          inline-size: 100%;
+          font: inherit;
+          color: inherit;
+          padding: 0.25ch 0;
+        }
+
+        table {
+          inline-size: 100%;
+          border-collapse: collapse;
+
+          & tr {
+            border-inline-start: var(--focus-line) solid transparent;
+            &:focus-within {
+              border-inline-start-color: var(--accent);
+            }
+          }
+
+          & td {
+            padding: var(--row-pad-block) var(--row-pad-inline);
+            vertical-align: middle;
+            border-block-end: 1px solid var(--border);
+          }
+
+          & td:first-child {
+            color: var(--muted);
+            inline-size: 30%;
+          }
+
+          & tr:first-child td { padding-block-start: 1.5ch; }
+          & tr:last-child td { border: none; }
+        }
+
+        select { cursor: pointer; }
+
+        td > span {
+          display: flex;
+          align-items: center;
+          margin:
+            calc(-1 * var(--row-pad-block))
+            calc(-1 * var(--row-pad-inline));
+          padding-inline-start: var(--row-pad-inline);
+
+          & > input {
+            flex: 1;
+            padding-inline: 0;
+            padding-block: var(--row-pad-block);
+          }
+
+          & > span {
+            display: flex;
+            gap: 0;
+            font-size: 1.4em;
+            font-weight: 500;
+            opacity: 0;
+            pointer-events: none;
+            align-self: stretch;
+
+            & > span {
+              display: flex;
+              align-items: stretch;
+            }
+
+            & button {
+              display: grid;
+              place-items: center;
+              min-inline-size: var(--item-action);
+
+              &:disabled {
+                opacity: 0.35;
+                cursor: default;
+                pointer-events: none;
+              }
+            }
+
+            & .stepper {
+              display: grid;
+              grid-template-rows: 1fr 1fr;
+
+              & button {
+                padding-block: 0.18em;
+              }
+            }
+
+            & .icon {
+              display: grid;
+              place-items: center;
+              flex: none;
+              block-size: 0.44em;
+              aspect-ratio: var(--icon-ratio);
+
+              & svg {
+                display: block;
+                inline-size: 100%;
+                block-size: 100%;
+              }
+            }
+
+            & .stepper button:first-of-type .icon {
+              transform: translateY(0.03em);
+
+              & svg {
+                transform: rotate(180deg);
+              }
+            }
+
+            & .stepper button:last-of-type .icon {
+              transform: translateY(-0.03em);
+            }
+
+            & > span:last-of-type {
+              & button:first-of-type {
+                color: var(--ok);
+              }
+              & button:last-of-type {
+                color: var(--danger);
+              }
+            }
+          }
+        }
+
+        tr:focus-within td > span > span {
+          opacity: 1;
+          pointer-events: auto;
+        }
+
+        button {
+          all: unset;
+          display: inline-block;
+          cursor: pointer;
+          color: var(--muted);
+          font: inherit;
+          padding: 0 0.5ch;
+
+          &:not(:disabled):hover {
+            color: var(--fg);
+            background: var(--border);
+          }
+        }
+
+        textarea {
+          all: unset;
+          display: block;
+          inline-size: 100%;
+          padding: 2ch;
+          font: inherit;
+          color: inherit;
+          white-space: pre;
+          tab-size: 2;
+          box-sizing: border-box;
+          field-sizing: content;
+          overflow: hidden;
+        }
+
+        p[role='alert'] {
+          display: block;
+          margin: 0;
+          padding: 1ch 2ch;
+          color: light-dark(#c00, #f66);
+          border-block-start: 1px solid var(--border);
+        }
+      </style>
+
+      <header>
+        <button
+          type="button"
+          data-side="left"
+          aria-label="replica status">
+          ${icon('wifi', 'header-status')}
+        </button>
+        <span class="title">${this.getAttribute('label') ?? ''}</span>
+        ${this.#editing
+          ? this.#headerButton(
+            'apply',
+            'apply JSON changes',
+            'apply',
+            () => this.#save()
+          )
+          : this.#headerButton(
+            'edit',
+            'edit JSON source',
+            'command',
+            () => this.#edit()
+          )}
+      </header>
+      ${this.#editing
+        ? html`
+          <textarea
+            aria-label="json source"
+            spellcheck="false"
+            .value=${JSON.stringify(this.#data, null, 2)}
+          ></textarea>
+          ${this.#error
+            ? html`<p role="alert">${this.#error}</p>`
+            : null}`
+        : html`
+          <table>
+            ${this.#rows()}
+          </table>
+          `}`
+  }
+
+  render() {
+    render(this.#template(), this.#root)
+
+    if (!this.#focus)
+      return
+
+    const { key, index } = this.#focus
+    const input = this.#item(key, index)
+
+    this.#focus = null
+    input?.focus()
+  }
+}
+
+const PEERS = new WeakMap()
+
+class Bus {
+  #handlers = new Map()
+  sent = []
+
+  static createPair() {
+    const a = new Bus()
+    const b = new Bus()
+
+    PEERS.set(a, b)
+    PEERS.set(b, a)
+
+    return { a, b }
+  }
+
+  send(event, payload) {
+    this.sent.push({ event, payload })
+
+    const peer = PEERS.get(this)
+
+    if (peer)
+      queueMicrotask(() => peer.#receive(event, payload))
+  }
+
+  on(event, handler) {
+    const listeners = this.#handlers.get(event) ?? new Set()
+
+    listeners.add(handler)
+    this.#handlers.set(event, listeners)
+
+    return () => listeners.delete(handler)
+  }
+
+  #receive(event, payload) {
+    for (const handler of this.#handlers.get(event) ?? [])
+      handler(payload)
+  }
+}
+
+class LogView extends HTMLElement {
+  #lines = []
+  #root = this.attachShadow({ mode: 'open' })
+
+  set lines(value) {
+    this.#lines = value
+    this.render()
+  }
+
+  connectedCallback() {
+    this.render()
+  }
+
+  #template() {
+    return html`
+      <style>
+        :host {
+          --bg: light-dark(#1a1a1a, #0e0e0e);
+          --fg: light-dark(#aaa, #777);
+          --muted: light-dark(#666, #555);
+          --accent: light-dark(#8ab4f8, #5a9af8);
+          --header-action: 5ch;
+          --pad-block: 2.5ch;
+          --pad-inline: 3ch;
+          --row-gap: 1.75ch;
+          --row-pad-block: 1.1ch;
+          --row-pad-inline: 1.35ch;
+          display: block;
+          font: 0.75rem / 1.6 ui-monospace;
+          background: var(--bg);
+          color: var(--fg);
+          border-radius: var(--radius);
+          box-shadow: var(--shadow);
+          overflow: hidden;
+        }
+
+        header {
+          display: flex;
+          align-items: stretch;
+          background: var(--bg);
+          border-block-end: 1px solid var(--border);
+
+          & .title {
+            display: flex;
+            align-items: center;
+            padding: 0.75ch var(--row-pad-inline) 0.75ch 0.8ch;
+            color: light-dark(#111, #efefef);
+            font-size: 1.02em;
+            font-weight: 560;
+            letter-spacing: 0.035em;
+            margin-inline-end: auto;
+          }
+
+          & button {
+            all: unset;
+            aspect-ratio: 1;
+            inline-size: var(--header-action);
+            font-size: 1.2em;
+            display: grid;
+            place-items: center;
+            padding: 0;
+            cursor: pointer;
+            color: light-dark(#111, #efefef);
+            border-radius: 0 var(--radius) 0 0;
+            border-inline-start: 1px solid var(--border);
+
+            &:hover {
+              color: var(--accent);
+              background: var(--border);
+            }
+
+            &[data-side='left'] {
+              inline-size: 4.25ch;
+              color: var(--muted);
+              border-radius: var(--radius) 0 0 0;
+              border-inline-start: none;
+            }
+          }
+        }
+
+        .icon {
+          display: grid;
+          place-items: center;
+          flex: none;
+          block-size: var(--icon-block-size);
+
+          &[data-shape='ratio'] {
+            aspect-ratio: var(--icon-ratio);
+          }
+
+          &[data-shape='square'] {
+            inline-size: var(--icon-block-size);
+          }
+
+          &[data-slot='header-status'] {
+            --icon-block-size: 0.7em;
+          }
+
+          &[data-slot='header-command'] {
+            --icon-block-size: 0.76em;
+          }
+
+          &[data-slot='log-toggle'] {
+            --icon-block-size: 0.52rem;
+          }
+
+          & svg {
+            display: block;
+            inline-size: 100%;
+            block-size: 100%;
+          }
+        }
+
+        ol {
+          list-style: none;
+          margin: 0;
+          padding: var(--pad-block) var(--pad-inline);
+          display: grid;
+          gap: 0.9ch;
+          overflow-y: auto;
+          max-block-size: 18rem;
+          scrollbar-width: none;
+
+          &::-webkit-scrollbar {
+            display: none;
+          }
+
+          & li {
+            & details {
+              inline-size: 100%;
+              min-inline-size: 0;
+            }
+
+            & summary {
+              list-style: none;
+              cursor: pointer;
+              display: grid;
+              grid-template-columns: auto auto 18ch minmax(0, 1fr);
+              align-items: center;
+              gap: var(--row-gap);
+              padding: var(--row-pad-block) var(--row-pad-inline);
+
+              &::-webkit-details-marker {
+                display: none;
+              }
+            }
+
+            & .toggle {
+              color: var(--accent);
+              display: grid;
+              place-items: center;
+            }
+
+            & details[open] .toggle .closed {
+              display: none;
+            }
+
+            & details:not([open]) .toggle .open {
+              display: none;
+            }
+
+            & .peer {
+              color: var(--accent);
+              min-inline-size: 2ch;
+            }
+
+            & .kind {
+              color: var(--muted);
+            }
+
+            & .preview {
+              color: var(--fg);
+              min-inline-size: 0;
+              white-space: nowrap;
+              overflow: hidden;
+              text-overflow: ellipsis;
+            }
+
+            & pre {
+              margin: 0;
+              max-inline-size: 100%;
+              font: inherit;
+              tab-size: 2;
+              padding:
+                1ch var(--row-pad-inline)
+                var(--row-pad-inline) var(--row-pad-inline);
+              color: light-dark(#d4d4d4, #a4a4a4);
+              white-space: pre-wrap;
+              overflow-wrap: anywhere;
+              overflow: auto;
+              scrollbar-width: none;
+
+              &::-webkit-scrollbar {
+                display: none;
+              }
+            }
+          }
+        }
+      </style>
+
+      <header>
+        <button
+          type="button"
+          data-side="left"
+          aria-label="bus status">
+          ${icon('server', 'header-status')}
+        </button>
+        <span class="title">Bus</span>
+        <button
+          type="button"
+          aria-label="log actions">
+          ${icon('command', 'header-command')}
+        </button>
+      </header>
+      <ol role="log" aria-live="polite" aria-relevant="additions text">
+        ${this.#lines.map(({ peer, kind, preview, payload }) => html`
+          <li>
+            <details name="transport-log">
+              <summary>
+                <span class="toggle">
+                  <span class="closed">${icon('plus', 'log-toggle', 'square')}</span>
+                  <span class="open">${icon('minus', 'log-toggle', 'square')}</span>
+                </span>
+                <span class="peer">${peer}</span>
+                <span class="kind">${kind}</span>
+                <span class="preview">${preview}</span>
+              </summary>
+              <pre>${payload}</pre>
+            </details>
+          </li>`)}
+      </ol>`
+  }
+
+  render() {
+    render(this.#template(), this.#root)
+    const ol = this.#root.querySelector('ol')
+
+    if (ol)
+      ol.scrollTop = ol.scrollHeight
+  }
+}
+
+const createPeer = () => {
+  class User extends Reactive {}
+  return User
+}
+
+class App {
+  #lines = []
+
+  constructor({ log, foo, bar }) {
+    this.ui = { log, foo, bar }
+  }
+
+  #summarize(payload) {
+    return payload.op
+      ? `${payload.path?.join('.')}.${payload.op}(${payload.args?.map(a => JSON.stringify(a)).join(', ')})`
+      : payload.path
+        ? `${payload.path.join('.')} = ${JSON.stringify(payload.value)}`
+        : payload.id ?? ''
+  }
+
+  #payload(payload) {
+    try {
+      return payload === undefined
+        ? 'undefined'
+        : JSON.stringify(payload, null, 2) ?? String(payload)
+    } catch {
+      return String(payload)
+    }
+  }
+
+  #append({ peer, event, payload }) {
+    this.#lines.push({
+      peer,
+      kind: event.replace('reactive:', ''),
+      preview: this.#summarize(payload),
+      payload: this.#payload(payload),
+    })
+
+    if (this.#lines.length > 50)
+      this.#lines.shift()
+
+    this.ui.log.lines = [...this.#lines]
+  }
+
+  #tapBus(peer, bus) {
+    return {
+      on: bus.on.bind(bus),
+      send: (event, payload) => {
+        this.#append({ peer, event, payload })
+        bus.send(event, payload)
+      },
+    }
+  }
+
+  #peer(label, bus) {
+    const Peer = createPeer()
+    const transport = this.#tapBus(label, bus)
+
+    Peer.use(transport)
+
+    return { Peer, transport }
+  }
+
+  #mount(foo, bar) {
+    this.ui.foo.data = foo
+    this.ui.bar.data = bar
+  }
+
+  #watch(view, bus) {
+    bus.on('reactive:delta', () => view.render())
+  }
+
+  async init() {
+    const { a, b } = Bus.createPair()
+    const foo = this.#peer('Foo', a)
+    const bar = this.#peer('Bar', b)
+
+    const local = new foo.Peer('shared', {
+      name: 'John',
+      email: 'john@example.com',
+      plan: 'pro',
+      active: true,
+      tags: ['admin', 'early-access'],
+    })
+    const remote = await bar.Peer.sync('shared')
+
+    this.#mount(local, remote)
+    this.#watch(this.ui.foo, foo.transport)
+    this.#watch(this.ui.bar, bar.transport)
+  }
+}
+
+customElements.define('json-editor', JsonEditor)
+customElements.define('log-view', LogView)
+
+const el = {
+  log: document.querySelector('#log'),
+  foo: document.querySelector('#foo'),
+  bar: document.querySelector('#bar'),
+}
+
+await new App(el).init()
+</script>
+</body>
+</html>
