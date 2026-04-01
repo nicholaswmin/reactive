@@ -1,5 +1,6 @@
 import { test } from 'node:test'
 
+import { Reactive } from '../src/index.js'
 import { Bus } from './utils/bus/index.js'
 import {
   createContext,
@@ -45,6 +46,67 @@ test('Reactive', async t => {
         const remote = await b.User.sync('nested')
 
         t.assert.equal(remote.address.city, 'London')
+      })
+
+      await t.test('waits for a matching snapshot response', async t => {
+        const a = createContext()
+        const b = createContext()
+        const { a: leftBus, b: rightBus } = Bus.createPair()
+
+        b.User.use(rightBus)
+
+        const pending = b.User.sync('authoritative')
+        const request = rightBus.sent.at(-1).payload
+        let settled = false
+
+        pending.finally(() => {
+          settled = true
+        })
+
+        rightBus.receive('reactive:delta', {
+          class: 'User',
+          id: 'authoritative',
+          path: ['name'],
+          value: 'B',
+          version: { tick: 1, context: 'remote' },
+        })
+        await Bus.flush()
+
+        t.assert.equal(settled, false)
+
+        rightBus.receive('reactive:snapshot:response', {
+          class: 'User',
+          id: 'authoritative',
+          requestId: request.requestId,
+          data: { age: 1, name: 'A' },
+          refs: [],
+          versions: [],
+        })
+
+        const remote = await pending
+
+        t.assert.equal(remote.name, 'B')
+        t.assert.equal(remote.age, 1)
+        t.assert.equal(leftBus.sent.length, 0)
+      })
+
+      await t.test('rejects explicit missing responses', async t => {
+        const { User } = createContext()
+        const { a: bus } = Bus.createPair()
+
+        User.use(bus)
+
+        const pending = User.sync('missing')
+        const request = bus.sent.at(-1).payload
+
+        bus.receive('reactive:snapshot:response', {
+          class: 'User',
+          id: 'missing',
+          missing: true,
+          requestId: request.requestId,
+        })
+
+        await t.assert.rejects(pending, /Unknown User:missing/)
       })
     })
   })
@@ -228,7 +290,7 @@ test('Reactive', async t => {
       })
 
       await t.test('concurrent push', async t => {
-        await t.test('preserves both elements', async t => {
+        await t.test('repairs to a single converged array', async t => {
           const { a, b } = t.ctx
           const left = new a.User('cpush', { tags: ['a'] })
           const right = await b.User.sync('cpush')
@@ -236,11 +298,11 @@ test('Reactive', async t => {
           left.tags.push('x')
           right.tags.push('y')
           await Bus.flush()
+          await Bus.flush()
 
-          t.assert.ok([...left.tags].includes('x'))
-          t.assert.ok([...left.tags].includes('y'))
-          t.assert.ok([...right.tags].includes('x'))
-          t.assert.ok([...right.tags].includes('y'))
+          t.assert.deepEqual([...left.tags], [...right.tags])
+          t.assert.equal(left.tags.length, 2)
+          t.assert.equal(left.tags[0], 'a')
         })
       })
 
@@ -252,7 +314,9 @@ test('Reactive', async t => {
           user.tags.push('b')
           await Bus.flush()
 
-          const delta = bus.a.sent.at(-1).payload
+          const delta = bus.a.sent
+            .findLast(message => message.event === 'reactive:delta')
+            .payload
 
           t.assert.partialDeepStrictEqual(delta, {
             path: ['tags'],
@@ -273,6 +337,87 @@ test('Reactive', async t => {
           await Bus.flush()
 
           t.assert.deepEqual([...right.tags], ['a', 'z', 'c'])
+        })
+      })
+
+      await t.test('nested array edits', async t => {
+        await t.test('replicate within item boundary', async t => {
+          const { a, b, bus } = t.ctx
+          const left = new a.User('nested-arr', {
+            items: [{ tags: ['a'] }],
+          })
+          const right = await b.User.sync('nested-arr')
+
+          left.items[0].tags.push('x')
+          await Bus.flush()
+
+          t.assert.deepEqual(right.toJSON(), {
+            id: 'nested-arr',
+            items: [{ tags: ['a', 'x'] }],
+          })
+
+          const delta = bus.a.sent
+            .findLast(message =>
+              message.event === 'reactive:delta' &&
+              message.payload.id === 'nested-arr')
+            .payload
+
+          t.assert.equal(delta.path[0], 'items')
+          t.assert.equal(delta.path.length, 3)
+          t.assert.equal(delta.path[2], 'tags')
+          t.assert.equal(delta.op, 'push')
+        })
+      })
+
+      await t.test('stale ops', async t => {
+        await t.test('do not replay after a newer array replacement', async t => {
+          const { a, b, bus } = t.ctx
+          const left = new a.User('stale-op', { tags: ['a'] })
+          const right = await b.User.sync('stale-op')
+
+          right.tags = ['b']
+          await Bus.flush()
+
+          bus.b.receive('reactive:delta', {
+            class: 'User',
+            id: 'stale-op',
+            path: ['tags'],
+            op: 'push',
+            args: ['x'],
+            baseVersion: null,
+            version: { tick: 1, context: 'older' },
+          })
+          await Bus.flush()
+          await Bus.flush()
+
+          t.assert.deepEqual([...left.tags], ['b'])
+          t.assert.deepEqual([...right.tags], ['b'])
+        })
+
+        await t.test('do not resurrect removed items', async t => {
+          const { a, b, bus } = t.ctx
+          const left = new a.User('ghost', {
+            items: [{ name: 'A' }, { name: 'B' }],
+          })
+          const right = await b.User.sync('ghost')
+
+          left.items.splice(0, 1)
+          await Bus.flush()
+
+          const before = bus.b.sent.length
+
+          bus.b.receive('reactive:delta', {
+            class: 'User',
+            id: 'ghost',
+            path: ['items', 'removed-id', 'name'],
+            value: 'Z',
+            version: { tick: 999, context: 'late' },
+          })
+          await Bus.flush()
+
+          t.assert.equal(right.items.length, 1)
+          t.assert.equal(right.items[0].name, 'B')
+          t.assert.ok(bus.b.sent.length > before)
         })
       })
     })
@@ -299,6 +444,33 @@ test('Reactive', async t => {
 
         t.assert.equal(post.title, 'Hello')
       })
+
+      await t.test('supports same constructor names with explicit types', async t => {
+        const makeRecord = type =>
+          class Record extends Reactive {
+            static type = type
+          }
+
+        const { a: leftBus, b: rightBus } = Bus.createPair()
+        const LeftUser = makeRecord('app/User@1')
+        const LeftPost = makeRecord('app/Post@1')
+        const RightUser = makeRecord('app/User@1')
+        const RightPost = makeRecord('app/Post@1')
+
+        LeftUser.use(leftBus)
+        LeftPost.use(leftBus)
+        RightUser.use(rightBus)
+        RightPost.use(rightBus)
+
+        new LeftUser('shared', { name: 'John' })
+        new LeftPost('shared', { title: 'Hello' })
+
+        const user = await RightUser.sync('shared')
+        const post = await RightPost.sync('shared')
+
+        t.assert.equal(user.name, 'John')
+        t.assert.equal(post.title, 'Hello')
+      })
     })
   })
 
@@ -316,6 +488,22 @@ test('Reactive', async t => {
       User.use(second)
 
       t.assert.equal(unsubscribe.mock.callCount(), 3)
+    })
+
+    await t.test('rejects duplicate explicit types on one bus', async t => {
+      const bus = { on: () => () => {}, send: () => {} }
+
+      class First extends Reactive {
+        static type = 'dup/Record@1'
+      }
+
+      class Second extends Reactive {
+        static type = 'dup/Record@1'
+      }
+
+      First.use(bus)
+
+      t.assert.throws(() => Second.use(bus), /already registered/)
     })
   })
 })

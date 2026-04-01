@@ -41,6 +41,24 @@ test('Reactive', async t => {
 
         t.assert.equal(user.address.zip, 'SW1')
       })
+
+      await t.test('rejects stale nested aliases after replacement', async t => {
+        const { User } = t.ctx
+        const user = new User('stale', {
+          address: { city: 'London' },
+        })
+        const address = user.address
+
+        user.address = { city: 'Berlin' }
+
+        t.assert.throws(
+          () => {
+            address.city = 'Paris'
+          },
+          /Stale reactive reference/,
+        )
+        t.assert.equal(user.address.city, 'Berlin')
+      })
     })
 
     await t.test('delete', async t => {
@@ -71,6 +89,15 @@ test('Reactive', async t => {
         user.tags.splice(1, 1, 'z')
 
         t.assert.deepEqual([...user.tags], ['a', 'z', 'c'])
+      })
+
+      await t.test('self-returning mutators keep the proxy', async t => {
+        const { User } = t.ctx
+        const user = new User('sort', { tags: ['b', 'a'] })
+        const result = user.tags.sort()
+
+        t.assert.equal(result, user.tags)
+        t.assert.deepEqual([...user.tags], ['a', 'b'])
       })
 
       await t.test('index write updates', async t => {
