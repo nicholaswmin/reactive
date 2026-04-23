@@ -1,6 +1,8 @@
 import { SEP, rawOf, isContainer } from './internals.js'
 import { IdentifiedList, ITEM_ID } from './identity.js'
 
+const isIndexKey = segment => /^\d+$/.test(segment)
+
 const pathKey = path => path.join(SEP)
 const pathFrom = key => key ? key.split(SEP) : []
 const samePath = (left, right) => pathKey(left) === pathKey(right)
@@ -9,7 +11,7 @@ const valueAtPath = (target, path) =>
   path.reduce((cursor, segment) => {
     const raw = rawOf(cursor)
 
-    if (raw instanceof IdentifiedList && !/^\d+$/.test(segment))
+    if (raw instanceof IdentifiedList && !isIndexKey(segment))
       return raw.find(el => el?.[ITEM_ID] === segment)
 
     return rawOf(raw?.[segment])
@@ -26,7 +28,7 @@ const setAtPath = (target, path, value) => {
   for (const [index, segment] of path.slice(0, -1).entries()) {
     const raw = rawOf(cursor)
 
-    if (raw instanceof IdentifiedList && !/^\d+$/.test(segment)) {
+    if (raw instanceof IdentifiedList && !isIndexKey(segment)) {
       cursor = raw.find(el => el?.[ITEM_ID] === segment)
 
       if (!cursor)
@@ -39,7 +41,7 @@ const setAtPath = (target, path, value) => {
     const current = rawOf(cursor[segment])
 
     if (!isContainer(current))
-      cursor[segment] = /^\d+$/.test(next) ? [] : {}
+      cursor[segment] = isIndexKey(next) ? [] : {}
 
     cursor = rawOf(cursor[segment])
   }
@@ -66,7 +68,7 @@ const resolvePathExists = (target, path) => {
     const raw = rawOf(cursor)
     const segment = path[i]
 
-    if (raw instanceof IdentifiedList && !/^\d+$/.test(segment)) {
+    if (raw instanceof IdentifiedList && !isIndexKey(segment)) {
       cursor = raw.find(el => el?.[ITEM_ID] === segment)
 
       if (!cursor)
@@ -80,6 +82,7 @@ const resolvePathExists = (target, path) => {
 }
 
 export {
+  isIndexKey,
   pathKey,
   pathFrom,
   samePath,

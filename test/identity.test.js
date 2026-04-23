@@ -4,7 +4,7 @@ import { createContext } from './utils/context/index.js'
 
 test('Reactive', async t => {
   await t.test('#identity', async t => {
-    t.beforeEach(async t => {
+    t.beforeEach(t => {
       t.ctx = createContext()
     })
 
@@ -13,7 +13,7 @@ test('Reactive', async t => {
         const { User } = t.ctx
         const user = new User('abc-123', { name: 'John' })
 
-        t.assert.equal(user.id, 'abc-123')
+        t.assert.strictEqual(user.id, 'abc-123')
       })
 
       await t.test('generates unique id when omitted', async t => {
@@ -21,7 +21,7 @@ test('Reactive', async t => {
         const first = new User({ name: 'A' })
         const second = new User({ name: 'B' })
 
-        t.assert.notEqual(first.id, second.id)
+        t.assert.notStrictEqual(first.id, second.id)
       })
     })
 
@@ -31,7 +31,7 @@ test('Reactive', async t => {
         const first = new User('same', { name: 'A' })
         const second = new User('same', { name: 'B' })
 
-        t.assert.equal(first, second)
+        t.assert.strictEqual(first, second)
       })
 
       await t.test('returns separate instances for different classes', async t => {
@@ -39,7 +39,7 @@ test('Reactive', async t => {
         const user = new User('shared', { name: 'John' })
         const post = new Post('shared', { title: 'Hello' })
 
-        t.assert.notEqual(user, post)
+        t.assert.notStrictEqual(user, post)
       })
     })
 
@@ -48,14 +48,14 @@ test('Reactive', async t => {
         const { User } = t.ctx
         const user = new User('proxy', { name: 'John' })
 
-        t.assert.equal(user instanceof User, true)
+        t.assert.ok(user instanceof User)
       })
 
       await t.test('matches base class', async t => {
         const { Reactive, User } = t.ctx
         const user = new User('proxy-base', { name: 'John' })
 
-        t.assert.equal(user instanceof Reactive, true)
+        t.assert.ok(user instanceof Reactive)
       })
     })
   })

@@ -4,19 +4,17 @@ import { createContext } from './utils/context/index.js'
 
 test('Reactive', async t => {
   await t.test('#mutation', async t => {
-    t.beforeEach(async t => {
+    t.beforeEach(t => {
       t.ctx = createContext()
     })
 
-    await t.test('primitive write', async t => {
-      await t.test('readable immediately', async t => {
-        const { User } = t.ctx
-        const user = new User('prim', { name: 'A' })
+    await t.test('reads primitive writes immediately', async t => {
+      const { User } = t.ctx
+      const user = new User('prim', { name: 'A' })
 
-        user.name = 'B'
+      user.name = 'B'
 
-        t.assert.equal(user.name, 'B')
-      })
+      t.assert.strictEqual(user.name, 'B')
     })
 
     await t.test('nested write', async t => {
@@ -28,7 +26,7 @@ test('Reactive', async t => {
 
         user.address.city = 'Berlin'
 
-        t.assert.equal(user.address.city, 'Berlin')
+        t.assert.strictEqual(user.address.city, 'Berlin')
       })
 
       await t.test('preserves sibling properties', async t => {
@@ -39,7 +37,7 @@ test('Reactive', async t => {
 
         user.address.city = 'Berlin'
 
-        t.assert.equal(user.address.zip, 'SW1')
+        t.assert.strictEqual(user.address.zip, 'SW1')
       })
 
       await t.test('rejects stale nested aliases after replacement', async t => {
@@ -57,19 +55,17 @@ test('Reactive', async t => {
           },
           /Stale reactive reference/,
         )
-        t.assert.equal(user.address.city, 'Berlin')
+        t.assert.strictEqual(user.address.city, 'Berlin')
       })
     })
 
-    await t.test('delete', async t => {
-      await t.test('removes the property', async t => {
-        const { User } = t.ctx
-        const user = new User('del', { name: 'A', temp: true })
+    await t.test('removes deleted properties', async t => {
+      const { User } = t.ctx
+      const user = new User('del', { name: 'A', temp: true })
 
-        delete user.temp
+      delete user.temp
 
-        t.assert.equal('temp' in user, false)
-      })
+      t.assert.strictEqual('temp' in user, false)
     })
 
     await t.test('array', async t => {
@@ -79,7 +75,7 @@ test('Reactive', async t => {
 
         user.tags.push('c')
 
-        t.assert.deepEqual([...user.tags], ['a', 'b', 'c'])
+        t.assert.deepStrictEqual([...user.tags], ['a', 'b', 'c'])
       })
 
       await t.test('splice replaces', async t => {
@@ -88,7 +84,7 @@ test('Reactive', async t => {
 
         user.tags.splice(1, 1, 'z')
 
-        t.assert.deepEqual([...user.tags], ['a', 'z', 'c'])
+        t.assert.deepStrictEqual([...user.tags], ['a', 'z', 'c'])
       })
 
       await t.test('self-returning mutators keep the proxy', async t => {
@@ -96,8 +92,8 @@ test('Reactive', async t => {
         const user = new User('sort', { tags: ['b', 'a'] })
         const result = user.tags.sort()
 
-        t.assert.equal(result, user.tags)
-        t.assert.deepEqual([...user.tags], ['a', 'b'])
+        t.assert.strictEqual(result, user.tags)
+        t.assert.deepStrictEqual([...user.tags], ['a', 'b'])
       })
 
       await t.test('index write updates', async t => {
@@ -106,7 +102,7 @@ test('Reactive', async t => {
 
         user.tags[0] = 'x'
 
-        t.assert.deepEqual([...user.tags], ['x', 'b'])
+        t.assert.deepStrictEqual([...user.tags], ['x', 'b'])
       })
 
       await t.test('length truncation shrinks', async t => {
@@ -115,28 +111,28 @@ test('Reactive', async t => {
 
         user.tags.length = 2
 
-        t.assert.deepEqual([...user.tags], ['a', 'b'])
+        t.assert.deepStrictEqual([...user.tags], ['a', 'b'])
       })
     })
   })
 
   await t.test('#shape', async t => {
-    t.beforeEach(async t => {
+    t.beforeEach(t => {
       const { User } = createContext()
 
       t.user = new User('shape', { name: 'A', age: 1 })
     })
 
     await t.test('Object.keys reflects current properties', async t => {
-      t.assert.deepEqual(Object.keys(t.user).sort(), ['age', 'name'])
+      t.assert.deepStrictEqual(Object.keys(t.user).sort(), ['age', 'name'])
     })
 
     await t.test('spread copies current state', async t => {
-      t.assert.deepEqual({ ...t.user }, { age: 1, name: 'A' })
+      t.assert.deepStrictEqual({ ...t.user }, { age: 1, name: 'A' })
     })
 
     await t.test('JSON.stringify includes id', async t => {
-      t.assert.deepEqual(JSON.parse(JSON.stringify(t.user)), {
+      t.assert.deepStrictEqual(JSON.parse(JSON.stringify(t.user)), {
         id: 'shape',
         name: 'A',
         age: 1,

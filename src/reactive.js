@@ -13,7 +13,6 @@ import {
   isObject,
   isPlainObject,
   isContainer,
-  typeId,
   storeFor,
   liveFor,
 } from './internals.js'
@@ -21,7 +20,7 @@ import {
   IdentifiedList, ITEM_ID, assignItemId, ensureItemId,
 } from './identity.js'
 import {
-  pathKey, valueAtPath, setAtPath, deleteAtPath,
+  isIndexKey, pathKey, valueAtPath, setAtPath, deleteAtPath,
   resolvePathExists, samePath,
 } from './path.js'
 import {
@@ -149,7 +148,7 @@ const proxify = (target, record, path, boundary) => {
       let nextPath = [...path, String(prop)]
       const nextRaw = rawOf(value)
 
-      if (target instanceof IdentifiedList && /^\d+$/.test(String(prop))) {
+      if (target instanceof IdentifiedList && isIndexKey(String(prop))) {
         const iid = nextRaw?.[ITEM_ID]
 
         if (iid)
@@ -169,7 +168,7 @@ const proxify = (target, record, path, boundary) => {
       const next = clone(value)
 
       if (target instanceof IdentifiedList &&
-        /^\d+$/.test(String(prop)) && isPlainObject(next))
+        isIndexKey(String(prop)) && isPlainObject(next))
         ensureItemId(next)
 
       const changed = Reflect.set(target, prop, next, receiver)
@@ -198,6 +197,7 @@ const createRecord = (Ctor, id) => {
   const store = storeFor(Ctor)
   const target = Object.create(Ctor.prototype)
   const record = {
+    authoritative: false,
     Ctor,
     complete: false,
     id,
@@ -213,7 +213,6 @@ const createRecord = (Ctor, id) => {
 
   ROOTS.set(target, record)
   ROOTS.set(proxy, record)
-  TARGETS.set(proxy, target)
 
   store.refs.set(id, new WeakRef(proxy))
   store.finalizer.register(proxy, { id, refs: store.refs }, proxy)
@@ -278,14 +277,15 @@ const hydrate = (value, registry) => {
   return value
 }
 
-const replaceState = (record, data, versions = [], complete = record.complete) => {
+const replaceState = (record, data, versions = []) => {
   for (const key of Object.keys(record.target))
     delete record.target[key]
 
   for (const [key, value] of Object.entries(data))
     record.target[key] = hydrate(value, record.store.registry)
 
-  record.complete = complete
+  record.authoritative = true
+  record.complete = true
   record.versions = versions instanceof Map
     ? cloneVersions(versions)
     : versionsFrom(versions)
@@ -305,7 +305,7 @@ const applySnapshotState = (record, data, versions) => {
 
   const next = mergeSnapshotState(record, data, remoteVersions)
 
-  replaceState(record, next.data, next.versions, true)
+  replaceState(record, next.data, next.versions)
 }
 
 const applySnapshotMessage = (message, registry) => {
@@ -371,10 +371,14 @@ const requestSnapshot = (Ctor, id) => {
     const pending = clearPending(store, id)
 
     if (pending)
-      pending.reject(new Error(`Timed out syncing ${store.type}:${id}`))
+      pending.reject(
+        pending.missingError ??
+        new Error(`Timed out syncing ${store.type}:${id}`)
+      )
   }, timeoutMs)
 
   store.pending.set(id, {
+    missingError: null,
     promise,
     reject,
     requestId,
@@ -395,10 +399,12 @@ const requestRepair = record => {
   if (!record.store.bus)
     return
 
+  record.authoritative = false
+  storeSnapshot(record)
   requestSnapshot(record.Ctor, record.id).catch(() => {})
 }
 
-const applyRemoteSet = (record, path, value, version) => {
+const canApplyRemote = (record, path, version) => {
   if (
     compareVersion(record.versions.get(pathKey(path)), version) >= 0 ||
     newerAncestor(record, path, version) ||
@@ -411,6 +417,13 @@ const applyRemoteSet = (record, path, value, version) => {
     return false
   }
 
+  return true
+}
+
+const applyRemoteSet = (record, path, value, version) => {
+  if (!canApplyRemote(record, path, version))
+    return false
+
   setAtPath(record.target, path, hydrate(value, record.store.registry))
   rememberVersion(record, path, version)
   storeSnapshot(record)
@@ -419,11 +432,7 @@ const applyRemoteSet = (record, path, value, version) => {
 }
 
 const applyRemoteDelete = (record, path, version) => {
-  if (
-    compareVersion(record.versions.get(pathKey(path)), version) >= 0 ||
-    newerAncestor(record, path, version) ||
-    newerDescendant(record, path, version)
-  )
+  if (!canApplyRemote(record, path, version))
     return false
 
   deleteAtPath(record.target, path)
@@ -503,7 +512,7 @@ const handleRequest = (Ctor, message) => {
 
   const live = liveFor(Ctor, message.id)
   const liveRecord = live ? rootFor(live) : null
-  const snapshot = liveRecord?.complete
+  const snapshot = liveRecord?.complete && liveRecord.authoritative
     ? buildSnapshotGraph(liveRecord)
     : buildCachedSnapshotGraph(Ctor, message.id, store.registry)
 
@@ -531,12 +540,12 @@ const handleResponse = (Ctor, message) => {
   if (!pending || pending.requestId !== message.requestId)
     return
 
-  clearPending(store, message.id)
-
   if (message.missing) {
-    pending.reject(new Error(`Unknown ${store.type}:${message.id}`))
+    pending.missingError = new Error(`Unknown ${store.type}:${message.id}`)
     return
   }
+
+  clearPending(store, message.id)
 
   const instance = applySnapshotMessage(message, store.registry)
 
@@ -567,7 +576,7 @@ export class Reactive {
 
     const record = createRecord(Ctor, value)
 
-    replaceState(record, clone(state), [], true)
+    replaceState(record, clone(state))
 
     return record.proxy
   }
@@ -575,8 +584,9 @@ export class Reactive {
   static sync(id) {
     const Ctor = this
     const live = liveFor(Ctor, id)
+    const record = live ? rootFor(live) : null
 
-    if (live && rootFor(live)?.complete)
+    if (record?.complete && record.authoritative)
       return Promise.resolve(live)
 
     const store = storeFor(Ctor)
@@ -594,6 +604,13 @@ export class Reactive {
 
   static use(bus) {
     const store = storeFor(this)
+    const registry = bus
+      ? REGISTRIES.get(bus) ?? new Map()
+      : null
+    const current = registry?.get(store.type)
+
+    if (current && current !== this)
+      throw new Error(`Reactive type "${store.type}" already registered`)
 
     for (const cleanup of store.cleanup)
       cleanup()
@@ -606,12 +623,6 @@ export class Reactive {
     store.bus = bus
 
     if (bus) {
-      const registry = REGISTRIES.get(bus) ?? new Map()
-      const current = registry.get(store.type)
-
-      if (current && current !== this)
-        throw new Error(`Reactive type "${store.type}" already registered`)
-
       REGISTRIES.set(bus, registry)
       registry.set(store.type, this)
       store.registry = registry

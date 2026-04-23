@@ -7,6 +7,7 @@ Implementation spec for the current runtime.
 - Identity is keyed by `(type, id)`.
 - `static type` is the stable wire id when present.
 - If `static type` is omitted, the wire id falls back to `Ctor.name`.
+- Wire payloads currently carry that type id in a `class` field.
 - Reconstructing the same `(type, id)` returns the same live instance
   within a context.
 - Different types may reuse the same `id` without colliding.
@@ -34,6 +35,7 @@ Implementation spec for the current runtime.
   - `reactive:snapshot:response`
 - Rebinding tears down the previous subscriptions first.
 - Local writes emit deltas with `class`, `id`, `path`, and `version`.
+  The `class` field is the wire name for the record type id.
 - Arrays of plain objects use stable per-item identity (IdentifiedList).
   Item field edits produce granular deltas addressed by item UUID.
   Structural mutations emit a whole-list `set` with item identities.
@@ -67,25 +69,28 @@ Implementation spec for the current runtime.
 ## Sync
 
 - `sync(id)` returns the existing local instance only when that record is
-  complete.
-- Otherwise it uses a complete cached snapshot when one is available.
+  complete and authoritative.
+- Otherwise it uses a complete authoritative cached snapshot when one is
+  available.
 - Otherwise it sends a snapshot request with a `requestId`.
 - Only the matching snapshot response resolves the pending `sync(id)`.
 - Deltas never satisfy `sync(id)` on their own.
-- Explicit missing responses reject `sync(id)`.
+- Missing responses are non-authoritative in multi-peer transports.
+- If no matching snapshot arrives, a matching missing response rejects
+  `sync(id)`.
 - Requests time out when no authoritative response arrives.
 
 ## Nested Reactives
 
 - Nested `Reactive` values serialize as `{ $ref, id }`.
-- Snapshot responses include the reachable nested snapshots needed to
-  hydrate those refs as live instances.
+- Snapshot responses include the complete authoritative nested snapshots
+  needed to hydrate those refs as live instances.
 - Child mutations replicate under the child id, not the parent id.
 - Removing a nested ref from a parent does not remove the child from the
   identity map.
 - Reactive reference cycles serialize without infinite recursion.
-- Cache-backed sync rebuilds reachable refs from per-record snapshots
-  when their types are registered locally.
+- Cache-backed sync rebuilds reachable refs from complete authoritative
+  per-record snapshots when their types are registered locally.
 
 ## Memory and offline
 

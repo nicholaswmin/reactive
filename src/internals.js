@@ -67,7 +67,6 @@ const storeFor = Ctor => {
     pending: new Map(),
     refs: new Map(),
     registry: new Map([[type, Ctor]]),
-    snapshotClock: 0,
     snapshots: new Map(),
     type,
   }
@@ -99,7 +98,6 @@ export {
   SNAPSHOT_LIMIT,
   SYNC_TIMEOUT_MS,
   STALE_REFERENCE_ERROR,
-  STORES,
   REGISTRIES,
   ROOTS,
   PROXIES,
@@ -111,7 +109,6 @@ export {
   isObject,
   isPlainObject,
   isContainer,
-  typeId,
   graphKey,
   storeFor,
   liveFor,

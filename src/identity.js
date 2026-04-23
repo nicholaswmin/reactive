@@ -3,7 +3,9 @@ import { randomUUID } from './internals.js'
 const ITEM_ID = Symbol('reactive:item-id')
 
 class IdentifiedList extends Array {
-  static get [Symbol.species]() { return Array }
+  static get [Symbol.species]() {
+    return Array
+  }
 }
 
 const assignItemId = (obj, id) =>

@@ -5,7 +5,7 @@ import { createLinkedContexts } from './utils/context/index.js'
 
 test('Reactive', async t => {
   await t.test('#nested refs', async t => {
-    t.beforeEach(async t => {
+    t.beforeEach(t => {
       t.ctx = createLinkedContexts()
     })
 
@@ -15,7 +15,7 @@ test('Reactive', async t => {
         const child = new a.User('child', { name: 'Freida' })
         const parent = new a.User('parent', { children: [child] })
 
-        t.assert.deepEqual(JSON.parse(JSON.stringify(parent)), {
+        t.assert.deepStrictEqual(JSON.parse(JSON.stringify(parent)), {
           id: 'parent',
           children: [{ $ref: 'User', id: 'child' }],
         })
@@ -41,7 +41,7 @@ test('Reactive', async t => {
 
         const parent = await b.User.sync('parent-live')
 
-        t.assert.equal(parent.children[0] instanceof b.User, true)
+        t.assert.ok(parent.children[0] instanceof b.User)
       })
 
       await t.test('restores current state', async t => {
@@ -52,46 +52,71 @@ test('Reactive', async t => {
 
         const parent = await b.User.sync('parent-state')
 
-        t.assert.equal(parent.children[0].name, 'Freida')
+        t.assert.strictEqual(parent.children[0].name, 'Freida')
       })
     })
 
-    await t.test('push ref via op', async t => {
-      await t.test('hydrates on remote', async t => {
-        const { a, b } = t.ctx
-        const parent = new a.User('op-parent', { children: [] })
-        const child = new a.User('op-child', { name: 'Freida' })
+    await t.test('hydrates pushed refs via ops when child is already known', async t => {
+      const { a, b } = t.ctx
+      const parent = new a.User('op-parent', { children: [] })
+      const child = new a.User('op-child', { name: 'Freida' })
+      const remote = await b.User.sync('op-parent')
 
-        await b.User.sync('op-parent')
-        await b.User.sync('op-child')
+      await b.User.sync('op-child')
 
-        parent.children.push(child)
-        await Bus.flush()
+      parent.children.push(child)
+      await Bus.flush()
 
-        const remote = await b.User.sync('op-parent')
-
-        t.assert.equal(remote.children[0] instanceof b.User, true)
-        t.assert.equal(remote.children[0].name, 'Freida')
-      })
+      t.assert.ok(remote.children[0] instanceof b.User)
+      t.assert.strictEqual(remote.children[0].name, 'Freida')
     })
 
-    await t.test('ref removal', async t => {
-      await t.test('child remains addressable', async t => {
-        const { a, b } = t.ctx
-        const child = new a.User('child-kept', { name: 'Freida' })
-        const parent = new a.User('parent-kept', {
-          children: [child],
-        })
-
-        await b.User.sync('parent-kept')
-
-        parent.children.splice(0, 1)
-        await Bus.flush()
-
-        const remote = await b.User.sync('child-kept')
-
-        t.assert.equal(remote.name, 'Freida')
+    await t.test('keeps children addressable after ref removal', async t => {
+      const { a, b } = t.ctx
+      const child = new a.User('child-kept', { name: 'Freida' })
+      const parent = new a.User('parent-kept', {
+        children: [child],
       })
+
+      await b.User.sync('parent-kept')
+
+      parent.children.splice(0, 1)
+      await Bus.flush()
+
+      const remote = await b.User.sync('child-kept')
+
+      t.assert.strictEqual(remote.name, 'Freida')
+    })
+
+    await t.test('does not hydrate through non-authoritative refs', async t => {
+      const { a, b, bus } = t.ctx
+      const child = new a.User('child-pending', { tags: ['a'] })
+
+      new a.User('parent-pending', { child })
+
+      bus.a.drop()
+      bus.a.receive('reactive:delta', {
+        class: 'User',
+        id: 'child-pending',
+        path: ['tags'],
+        op: 'push',
+        args: ['x'],
+        baseVersion: { tick: 999, context: 'remote' },
+        version: { tick: 1000, context: 'remote' },
+      })
+      await Bus.flush()
+
+      bus.a.pass()
+      b.User.syncTimeoutMs = 10
+
+      try {
+        await t.assert.rejects(
+          b.User.sync('parent-pending'),
+          /Unknown User:parent-pending/
+        )
+      } finally {
+        delete b.User.syncTimeoutMs
+      }
     })
   })
 })

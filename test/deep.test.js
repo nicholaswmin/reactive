@@ -9,7 +9,7 @@ import {
 test('Reactive', async t => {
   await t.test('#deep item edits', async t => {
     await t.test('delta path', async t => {
-      t.beforeEach(async t => {
+      t.beforeEach(t => {
         t.ctx = createLinkedContexts()
       })
 
@@ -22,17 +22,19 @@ test('Reactive', async t => {
         user.items[0].name = 'X'
         await Bus.flush()
 
-        const delta = bus.a.sent
+        const deltaMessage = bus.a.sent
           .findLast(message =>
             message.event === 'reactive:delta' &&
             message.payload.id === 'path')
-          .payload
 
-        t.assert.equal(delta.path.length, 3)
-        t.assert.equal(delta.path[0], 'items')
-        t.assert.equal(delta.path[2], 'name')
-        t.assert.notEqual(delta.path[1], '0')
-        t.assert.equal(delta.value, 'X')
+        t.assert.ok(deltaMessage)
+        const delta = deltaMessage.payload
+
+        t.assert.strictEqual(delta.path.length, 3)
+        t.assert.strictEqual(delta.path[0], 'items')
+        t.assert.strictEqual(delta.path[2], 'name')
+        t.assert.notStrictEqual(delta.path[1], '0')
+        t.assert.strictEqual(delta.value, 'X')
       })
 
       await t.test('survives index shift from splice', async t => {
@@ -68,7 +70,7 @@ test('Reactive', async t => {
             message.payload.value === 'C2')
 
         t.assert.ok(second)
-        t.assert.equal(second.payload.path[1], itemSegment)
+        t.assert.strictEqual(second.payload.path[1], itemSegment)
       })
 
       await t.test('push emits a whole-list set, not an op', async t => {
@@ -80,20 +82,22 @@ test('Reactive', async t => {
         user.items.push({ name: 'B' })
         await Bus.flush()
 
-        const delta = bus.a.sent
+        const deltaMessage = bus.a.sent
           .findLast(message =>
             message.event === 'reactive:delta' &&
             message.payload.id === 'lstpush')
-          .payload
 
-        t.assert.equal(delta.path[0], 'items')
-        t.assert.equal(delta.op, undefined)
+        t.assert.ok(deltaMessage)
+        const delta = deltaMessage.payload
+
+        t.assert.strictEqual(delta.path[0], 'items')
+        t.assert.strictEqual(delta.op, undefined)
         t.assert.ok(Array.isArray(delta.value))
       })
     })
 
     await t.test('convergence', async t => {
-      t.beforeEach(async t => {
+      t.beforeEach(t => {
         t.ctx = createLinkedContexts()
       })
 
@@ -108,15 +112,15 @@ test('Reactive', async t => {
         right.items[1].name = 'Y'
         await Bus.flush()
 
-        t.assert.equal(left.items[0].name, 'X')
-        t.assert.equal(left.items[1].name, 'Y')
-        t.assert.equal(right.items[0].name, 'X')
-        t.assert.equal(right.items[1].name, 'Y')
+        t.assert.strictEqual(left.items[0].name, 'X')
+        t.assert.strictEqual(left.items[1].name, 'Y')
+        t.assert.strictEqual(right.items[0].name, 'X')
+        t.assert.strictEqual(right.items[1].name, 'Y')
       })
     })
 
     await t.test('transparency', async t => {
-      t.beforeEach(async t => {
+      t.beforeEach(t => {
         t.ctx = createContext()
       })
 
@@ -128,8 +132,8 @@ test('Reactive', async t => {
 
         const json = JSON.parse(JSON.stringify(user))
 
-        t.assert.equal(json.items[0].$iid, undefined)
-        t.assert.equal(json.items[0].name, 'A')
+        t.assert.strictEqual(json.items[0].$iid, undefined)
+        t.assert.strictEqual(json.items[0].name, 'A')
       })
 
       await t.test('Object.keys excludes internal identity', async t => {
@@ -140,7 +144,7 @@ test('Reactive', async t => {
 
         const keys = Object.keys(user.items[0]).sort()
 
-        t.assert.deepEqual(keys, ['age', 'name'])
+        t.assert.deepStrictEqual(keys, ['age', 'name'])
       })
 
       await t.test('spread excludes internal identity', async t => {
@@ -151,7 +155,7 @@ test('Reactive', async t => {
 
         const copy = { ...user.items[0] }
 
-        t.assert.deepEqual(copy, { name: 'A' })
+        t.assert.deepStrictEqual(copy, { name: 'A' })
       })
     })
   })

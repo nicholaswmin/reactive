@@ -1,4 +1,4 @@
-import { rawOf, rootFor, isReactive, isPlainObject, typeId } from './internals.js'
+import { rawOf, rootFor, isReactive, isPlainObject } from './internals.js'
 import { IdentifiedList, ITEM_ID, ensureItemId, assignItemId } from './identity.js'
 import { pathKey, pathFrom } from './path.js'
 
@@ -51,50 +51,25 @@ const clone = value => {
   return raw
 }
 
-const serializeValue = (value, wire = false) => {
+const serializeValue = (value, wire = false, visit) => {
   if (isReactive(value)) {
     const root = rootFor(value)
 
-    return { $ref: typeId(root.Ctor), id: root.id }
+    visit?.(root)
+
+    return { $ref: root.store.type, id: root.id }
   }
 
   const raw = rawOf(value)
 
   if (Array.isArray(raw))
-    return raw.map(child => serializeValue(child, wire))
+    return raw.map(child => serializeValue(child, wire, visit))
 
   if (isPlainObject(raw)) {
     const entries = Object.entries(raw)
-      .map(([key, child]) => [key, serializeValue(child, wire)])
+      .map(([key, child]) => [key, serializeValue(child, wire, visit)])
 
-    if (wire && raw[ITEM_ID])
-      entries.push(['$iid', raw[ITEM_ID]])
-
-    return Object.fromEntries(entries)
-  }
-
-  return raw
-}
-
-const serializeSnapshotValue = (value, visit) => {
-  if (isReactive(value)) {
-    const root = rootFor(value)
-
-    visit(root)
-
-    return { $ref: typeId(root.Ctor), id: root.id }
-  }
-
-  const raw = rawOf(value)
-
-  if (Array.isArray(raw))
-    return raw.map(child => serializeSnapshotValue(child, visit))
-
-  if (isPlainObject(raw)) {
-    const entries = Object.entries(raw)
-      .map(([key, child]) => [key, serializeSnapshotValue(child, visit)])
-
-    if (raw[ITEM_ID])
+    if ((wire || visit) && raw[ITEM_ID])
       entries.push(['$iid', raw[ITEM_ID]])
 
     return Object.fromEntries(entries)
@@ -106,7 +81,7 @@ const serializeSnapshotValue = (value, visit) => {
 const serializeRecordData = (record, visit = () => {}) =>
   Object.fromEntries(
     Object.entries(record.target)
-      .map(([key, value]) => [key, serializeSnapshotValue(value, visit)])
+      .map(([key, value]) => [key, serializeValue(value, false, visit)])
   )
 
 const serializeVersions = versions =>
@@ -122,7 +97,6 @@ export {
   cloneData,
   clone,
   serializeValue,
-  serializeSnapshotValue,
   serializeRecordData,
   serializeVersions,
   versionsFrom,

@@ -1,5 +1,5 @@
 import {
-  storeFor, typeId, graphKey, isObject, isPlainObject, SNAPSHOT_LIMIT,
+  storeFor, graphKey, isObject, isPlainObject, SNAPSHOT_LIMIT,
 } from './internals.js'
 import { pathKey } from './path.js'
 import {
@@ -11,42 +11,38 @@ import {
 } from './serialize.js'
 
 const snapshotFor = record => ({
+  authoritative: record.authoritative,
   complete: record.complete,
   data: serializeRecordData(record),
-  order: ++record.store.snapshotClock,
   versions: cloneVersions(record.versions),
 })
 
-const trimSnapshots = store => {
-  while (store.snapshots.size > SNAPSHOT_LIMIT) {
-    let oldestId = null
-    let oldestOrder = Infinity
-
-    for (const [id, snapshot] of store.snapshots) {
-      if (snapshot.order < oldestOrder) {
-        oldestId = id
-        oldestOrder = snapshot.order
-      }
-    }
-
-    if (oldestId == null)
-      return
-
-    store.snapshots.delete(oldestId)
-  }
-}
-
 const storeSnapshot = record => {
-  record.store.snapshots.set(record.id, snapshotFor(record))
-  trimSnapshots(record.store)
+  const { snapshots } = record.store
+
+  snapshots.delete(record.id)
+  snapshots.set(record.id, snapshotFor(record))
+
+  while (snapshots.size > SNAPSHOT_LIMIT)
+    snapshots.delete(snapshots.keys().next().value)
 }
 
-const snapshotMessageFor = (Ctor, id, snapshot) => ({
-  class: typeId(Ctor),
+const snapshotMessageFor = (store, id, snapshot) => ({
+  class: store.type,
   data: cloneData(snapshot.data),
   id,
   versions: serializeVersions(snapshot.versions),
 })
+
+const itemIdOf = item =>
+  isPlainObject(item) && typeof item.$iid === 'string'
+    ? item.$iid
+    : null
+
+const identified = value =>
+  Array.isArray(value) &&
+  value.length > 0 &&
+  value.every(item => itemIdOf(item))
 
 const collectSnapshotRefs = (value, visit) => {
   if (!isObject(value))
@@ -69,7 +65,7 @@ const buildCachedSnapshotGraph = (Ctor, id, registry) => {
   const store = storeFor(Ctor)
   const rootSnapshot = store.snapshots.get(id)
 
-  if (!rootSnapshot?.complete)
+  if (!rootSnapshot?.complete || !rootSnapshot.authoritative)
     return null
 
   const refs = []
@@ -88,12 +84,13 @@ const buildCachedSnapshotGraph = (Ctor, id, registry) => {
     if (!RefCtor)
       return false
 
-    const snapshot = storeFor(RefCtor).snapshots.get(refId)
+    const refStore = storeFor(RefCtor)
+    const snapshot = refStore.snapshots.get(refId)
 
-    if (!snapshot?.complete)
+    if (!snapshot?.complete || !snapshot.authoritative)
       return false
 
-    refs.push(snapshotMessageFor(RefCtor, refId, snapshot))
+    refs.push(snapshotMessageFor(refStore, refId, snapshot))
 
     return collectSnapshotRefs(snapshot.data, visit)
   }
@@ -102,23 +99,32 @@ const buildCachedSnapshotGraph = (Ctor, id, registry) => {
     return null
 
   return {
-    ...snapshotMessageFor(Ctor, id, rootSnapshot),
+    ...snapshotMessageFor(store, id, rootSnapshot),
     refs,
   }
 }
 
 const buildSnapshotGraph = record => {
+  if (!record.complete || !record.authoritative)
+    return null
+
   const refs = []
-  const seen = new Set([graphKey(typeId(record.Ctor), record.id)])
+  const seen = new Set([graphKey(record.store.type, record.id)])
+  let valid = true
 
   const visit = current => {
-    const type = typeId(current.Ctor)
+    const type = current.store.type
     const key = graphKey(type, current.id)
 
     if (seen.has(key))
       return
 
     seen.add(key)
+
+    if (!current.complete || !current.authoritative) {
+      valid = false
+      return
+    }
 
     refs.push({
       class: type,
@@ -128,13 +134,55 @@ const buildSnapshotGraph = record => {
     })
   }
 
+  const data = serializeRecordData(record, visit)
+
+  if (!valid)
+    return null
+
   return {
-    class: typeId(record.Ctor),
-    data: serializeRecordData(record, visit),
+    class: record.store.type,
+    data,
     id: record.id,
     refs,
     versions: serializeVersions(record.versions),
   }
+}
+
+const mergeIdentifiedList = (
+  path,
+  localValue,
+  remoteValue,
+  localVersions,
+  remoteVersions,
+  mergedVersions,
+  localExact,
+  remoteExact,
+) => {
+  const localItems = new Map(localValue.map(item => [itemIdOf(item), item]))
+  const remoteItems = new Map(remoteValue.map(item => [itemIdOf(item), item]))
+  const ids = []
+  const add = item => {
+    const id = itemIdOf(item)
+
+    if (id && !ids.includes(id))
+      ids.push(id)
+  }
+
+  for (const item of compareVersion(localExact, remoteExact) > 0
+    ? [...localValue, ...remoteValue]
+    : [...remoteValue, ...localValue])
+    add(item)
+
+  return ids
+    .map(id => mergeSnapshotValue(
+      [...path, id],
+      localItems.get(id),
+      remoteItems.get(id),
+      localVersions,
+      remoteVersions,
+      mergedVersions,
+    ))
+    .filter(value => value !== undefined)
 }
 
 const mergeSnapshotValue = (
@@ -167,6 +215,18 @@ const mergeSnapshotValue = (
     setVersion(mergedVersions, path, exact)
 
   if (Array.isArray(localValue) || Array.isArray(remoteValue)) {
+    if (identified(localValue) && identified(remoteValue))
+      return mergeIdentifiedList(
+        path,
+        localValue,
+        remoteValue,
+        localVersions,
+        remoteVersions,
+        mergedVersions,
+        localExact,
+        remoteExact,
+      )
+
     const choice = compareVersion(localSubtree, remoteSubtree)
 
     if (choice > 0)
