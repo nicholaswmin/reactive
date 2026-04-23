@@ -70,8 +70,9 @@ npm run test:mut -- --dryRunOnly
 ```
 
 > [!NOTE]
-> All changes must include high-signal unit and integration tests,
-> structured according to the [contribution guide][cont-guide].
+> The [contribution guide][cont-guide] is the canonical testing guide.
+> It covers fixtures, protocol coverage, assertion style, and model
+> tests using `Generator.Assertions()` with `t.assert.models(...)`.
 
 [badge]: https://github.com/nicholaswmin/reactive/actions/workflows/test.yml/badge.svg
 [cont-guide]: ./.github/CONTRIBUTING.md

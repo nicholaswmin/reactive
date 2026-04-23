@@ -1,4 +1,3 @@
-import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
 import { Bus } from './utils/bus/index.js'
@@ -7,6 +6,8 @@ import {
   createLinkedContexts,
 } from './utils/context/index.js'
 import { Generator } from './utils/prop/index.js'
+
+Generator.Assertions()
 
 const snapshot = value => JSON.parse(JSON.stringify(value))
 
@@ -19,14 +20,6 @@ const initialState = () => ({
 })
 
 const expected = (id, model) => ({ id, ...snapshot(model) })
-
-const assertMatchesModel = (user, id, model) => {
-  assert.deepEqual(snapshot(user), expected(id, model))
-}
-
-const assertReusesIdentity = (Ctor, id, user) => {
-  assert.equal(new Ctor(id, { ignored: true }), user)
-}
 
 const commandsFor = (model, gen) => {
   const commands = [
@@ -177,15 +170,23 @@ test('Reactive', async t => {
           const id = `local-${seed}`
           const user = new User(id, snapshot(model))
 
-          assertMatchesModel(user, id, model)
+          t.assert.models(user, expected(id, model), {
+            command: 'initial',
+            seed,
+            step: 'initial',
+          })
 
           for (let step = 0; step < 40; step++) {
             const command = gen.pick(commandsFor(model, gen))
 
             command.run(user)
 
-            assertMatchesModel(user, id, model)
-            assertReusesIdentity(User, id, user)
+            t.assert.models(user, expected(id, model), {
+              command: command.name,
+              seed,
+              step,
+            })
+            t.assert.strictEqual(new User(id, { ignored: true }), user)
           }
         })
       }
@@ -201,25 +202,53 @@ test('Reactive', async t => {
           const left = new a.User(id, snapshot(model))
           const right = await b.User.sync(id)
 
-          assertMatchesModel(left, id, model)
-          assertMatchesModel(right, id, model)
+          t.assert.models(left, expected(id, model), {
+            command: 'initial',
+            seed,
+            side: 'left',
+            step: 'initial',
+          })
+          t.assert.models(right, expected(id, model), {
+            command: 'initial',
+            seed,
+            side: 'right',
+            step: 'initial',
+          })
 
           for (let step = 0; step < 40; step++) {
             const actor = gen.bool() ? left : right
             const Ctor = actor === left ? a.User : b.User
+            const side = actor === left ? 'left' : 'right'
             const command = gen.pick(commandsFor(model, gen))
 
             command.run(actor)
 
-            assertMatchesModel(actor, id, model)
-            assertReusesIdentity(Ctor, id, actor)
+            t.assert.models(actor, expected(id, model), {
+              command: command.name,
+              seed,
+              side,
+              step,
+            })
+            t.assert.strictEqual(new Ctor(id, { ignored: true }), actor)
 
             await Bus.flush()
 
-            assertMatchesModel(left, id, model)
-            assertMatchesModel(right, id, model)
-            assertReusesIdentity(a.User, id, left)
-            assertReusesIdentity(b.User, id, right)
+            t.assert.models(left, expected(id, model), {
+              actor: side,
+              command: command.name,
+              seed,
+              side: 'left',
+              step,
+            })
+            t.assert.models(right, expected(id, model), {
+              actor: side,
+              command: command.name,
+              seed,
+              side: 'right',
+              step,
+            })
+            t.assert.strictEqual(new a.User(id, { ignored: true }), left)
+            t.assert.strictEqual(new b.User(id, { ignored: true }), right)
           }
         })
       }

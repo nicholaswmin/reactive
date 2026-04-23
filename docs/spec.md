@@ -99,3 +99,14 @@ Implementation spec for the current runtime.
 - The runtime keeps in-memory snapshots only.
 - Offline mutations are local-first in memory, but not durable.
 - There is no durable outbox, retry journal, or CRDT merge layer.
+
+## Verification
+
+- `.github/CONTRIBUTING.md` is the canonical testing guide.
+- Behavior changes must be covered by `node:test` tests using the
+  existing fixtures.
+- Protocol changes must cover local behavior, one-way replication,
+  both directions, stale or duplicate delivery, snapshot repair, and
+  arrays when arrays are touched.
+- Model tests compare live `Reactive` state against a plain-object model
+  with `t.assert.models(...)`.

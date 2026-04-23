@@ -155,6 +155,8 @@ Run:
 
 ```sh
 npm test
+npm run test:cov
+npm run test:mut -- --dryRunOnly
 ```
 
 Fixtures:
@@ -165,9 +167,12 @@ Fixtures:
 
 Guidelines:
 
+- Add the smallest repro first.
+- Keep tests behavior-based and refactor-resistant.
 - Test ids are short and descriptive.
 - No prefixes.
-- No custom assertion messages.
+- Use `t.assert.*` strict assertions.
+- Do not add custom assertion messages to ordinary assertions.
 - `await Bus.flush()` settles pending async delivery.
 - Treat each `Bus.flush()` as one transport turn.
 - Use two flushes only when the protocol needs a second turn.
@@ -178,6 +183,19 @@ Guidelines:
 - Then inspect `.payload`.
 - Keep tests symmetrical.
 
+Model tests:
+
+- `test/model.test.js` uses a plain-object model as the oracle.
+- `test/utils/prop/index.js` provides the seeded `Generator`.
+- `Generator.Assertions()` installs model assertions.
+- Use `t.assert.models(actual, expected, info)` for generated
+  state checks.
+- Pass `seed`, `step`, `command`, and `side` when they apply.
+  That context belongs in the registered assertion, not in ad hoc
+  assertion messages.
+- Do not add a fuzzing dependency or shrinker unless the test failure
+  workflow proves it is needed.
+
 Cover at minimum:
 
 - local mutation
@@ -185,6 +203,7 @@ Cover at minimum:
 - both directions
 - stale or duplicate delivery
 - snapshot repair
+- arrays, if arrays are touched
 
 ## Code style
 

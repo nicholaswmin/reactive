@@ -1,3 +1,28 @@
+import { AssertionError } from 'node:assert'
+import { assert } from 'node:test'
+import { isDeepStrictEqual } from 'node:util'
+
+const snapshot = value => JSON.parse(JSON.stringify(value))
+
+const details = info =>
+  Object.entries(info)
+    .map(([key, value]) => `${key} ${value}`)
+    .join(', ')
+
+const models = (actual, expected, info = {}) => {
+  const actualSnapshot = snapshot(actual)
+
+  if (isDeepStrictEqual(actualSnapshot, expected))
+    return
+
+  throw new AssertionError({
+    actual: actualSnapshot,
+    expected,
+    message: `models failed: ${details(info)}`,
+    operator: 'deepStrictEqual',
+  })
+}
+
 export class Generator {
   #next
 
@@ -9,6 +34,10 @@ export class Generator {
     'oslo',
     'tokyo',
   ]
+
+  static Assertions() {
+    assert.register('models', models)
+  }
 
   static #rng(seed) {
     let value = seed >>> 0
