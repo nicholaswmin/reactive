@@ -1,8 +1,8 @@
 [![test][badge]][workflow]
 
-# reactive
+# Reactive
 
-Replicated domain objects for isolated JavaScript contexts.
+Replicated domain objects
 
 ## Model
 
@@ -19,13 +19,13 @@ import { Reactive } from 'reactive'
 
 class User extends Reactive {
   static type = 'app/User@1'
-  
+
   constructor(id, data) {
     super(id)
     this.name = data.name
     this.address = data.address
   }
-  
+
   sayHi() {
     console.log(`Hi, I'm ${this.name} from ${this.address.city}!`)
   }
@@ -39,7 +39,7 @@ const john = new User('abc-123', {
 })
 ```
 
-in another planet far, far away...
+In another context:
 
 ```js
 const john = await User.sync('abc-123')
@@ -61,13 +61,18 @@ A bus with `send(event, payload)` and `on(event, handler)`.
 - Concurrent item edits to different items both survive.
   Concurrent structural changes converge to one LWW array.
 
-## Test
+## Tests
 
 ```sh
 npm test
+npm run test:cov
+npm run test:mut -- --dryRunOnly
 ```
 
-See [`docs/spec.md`](./docs/spec.md) for the implementation spec.
+> [!NOTE]
+> All changes must include high-signal unit and integration tests,
+> structured according to the [contribution guide][cont-guide].
 
 [badge]: https://github.com/nicholaswmin/reactive/actions/workflows/test.yml/badge.svg
+[cont-guide]: ./.github/CONTRIBUTING.md
 [workflow]: https://github.com/nicholaswmin/reactive/actions/workflows/test.yml
