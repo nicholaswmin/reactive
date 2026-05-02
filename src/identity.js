@@ -1,4 +1,4 @@
-import { randomUUID } from './internals.js'
+import { randomUUID } from '#internals'
 
 const ITEM_ID = Symbol('reactive:item-id')
 

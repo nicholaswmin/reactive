@@ -7,6 +7,9 @@
     "node": ">=24"
   },
   "exports": "./src/index.js",
+  "imports": {
+    "#*": "./src/*.js"
+  },
   "scripts": {
     "test": "node --test \"test/**/*.test.js\"",
     "test:cov": "node --test --experimental-test-coverage \"test/**/*.test.js\"",

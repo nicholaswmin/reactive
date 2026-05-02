@@ -15,23 +15,23 @@ import {
   isContainer,
   storeFor,
   liveFor,
-} from './internals.js'
+} from '#internals'
 import {
   IdentifiedList, ITEM_ID, assignItemId, ensureItemId,
-} from './identity.js'
+} from '#identity'
 import {
   isIndexKey, pathKey, valueAtPath, setAtPath, deleteAtPath,
   resolveIdentifiedItemExists, samePath,
-} from './path.js'
+} from '#path'
 import {
   compareVersion, versionAt, newerAncestor, newerDescendant,
   rememberVersion, nextVersion, cloneVersions,
-} from './version.js'
-import { clone, serializeValue, versionsFrom } from './serialize.js'
+} from '#version'
+import { clone, serializeValue, versionsFrom } from '#serialize'
 import {
   storeSnapshot, buildSnapshotGraph, buildCachedSnapshotGraph,
   mergeSnapshotState,
-} from './snapshot.js'
+} from '#snapshot'
 
 const assertLiveTarget = (record, path, target) => {
   if (!path.length)

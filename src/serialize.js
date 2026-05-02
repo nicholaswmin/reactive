@@ -1,6 +1,6 @@
-import { rawOf, rootFor, isReactive, isPlainObject } from './internals.js'
-import { IdentifiedList, ITEM_ID, ensureItemId } from './identity.js'
-import { pathKey, pathFrom } from './path.js'
+import { rawOf, rootFor, isReactive, isPlainObject } from '#internals'
+import { IdentifiedList, ITEM_ID, ensureItemId } from '#identity'
+import { pathKey, pathFrom } from '#path'
 
 const cloneData = value => {
   if (Array.isArray(value))

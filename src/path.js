@@ -1,5 +1,5 @@
-import { SEP, rawOf, isContainer } from './internals.js'
-import { IdentifiedList, ITEM_ID } from './identity.js'
+import { SEP, rawOf, isContainer } from '#internals'
+import { IdentifiedList, ITEM_ID } from '#identity'
 
 const isIndexKey = segment => /^\d+$/.test(segment)
 

@@ -1,14 +1,14 @@
 import {
   storeFor, graphKey, isObject, isPlainObject, SNAPSHOT_LIMIT,
-} from './internals.js'
-import { pathKey } from './path.js'
+} from '#internals'
+import { pathKey } from '#path'
 import {
   compareVersion, strongerVersion, setVersion,
   newestVersionInSubtree, cloneVersions,
-} from './version.js'
+} from '#version'
 import {
   cloneData, serializeRecordData, serializeVersions,
-} from './serialize.js'
+} from '#serialize'
 
 const snapshotFor = record => ({
   authoritative: record.authoritative,

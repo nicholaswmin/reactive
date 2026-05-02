@@ -1,5 +1,5 @@
-import { SEP } from './internals.js'
-import { pathKey } from './path.js'
+import { SEP } from '#internals'
+import { pathKey } from '#path'
 
 const compareVersion = (left, right) => {
   if (!left && !right)
