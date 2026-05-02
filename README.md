@@ -1,4 +1,5 @@
-[![test][badge]][workflow]
+[![test_unit][test-unit-badge]][test-unit-flow]
+[![test_mutt][test-mutt-badge]][test-mutt-flow]
 
 # Reactive
 
@@ -64,6 +65,7 @@ A bus with `send(event, payload)` and `on(event, handler)`.
 ## Tests
 
 ```sh
+node --test test/model.test.js
 npm test
 npm run test:cov
 npm run test:mut -- --dryRunOnly
@@ -72,8 +74,12 @@ npm run test:mut -- --dryRunOnly
 > [!NOTE]
 > The [contribution guide][cont-guide] is the canonical testing guide.
 > It covers fixtures, protocol coverage, assertion style, and model
-> tests using `Generator.Assertions()` with `t.assert.models(...)`.
+> tests. `test/model.test.js` explicitly installs
+> `Generator.Assertions()` and uses `t.assert.models(...)` for the
+> seeded oracle checks.
 
-[badge]: https://github.com/nicholaswmin/reactive/actions/workflows/test.yml/badge.svg
+[test-unit-badge]: https://github.com/nicholaswmin/reactive/actions/workflows/test.yml/badge.svg?label=unit%20tests
+[test-unit-flow]: https://github.com/nicholaswmin/reactive/actions/workflows/test.yml
+[test-mutt-badge]: https://github.com/nicholaswmin/reactive/actions/workflows/test_mut.yml/badge.svg?label=mutation%20tests
+[test-mutt-flow]: https://github.com/nicholaswmin/reactive/actions/workflows/test_mut.yml
 [cont-guide]: ./.github/CONTRIBUTING.md
-[workflow]: https://github.com/nicholaswmin/reactive/actions/workflows/test.yml
