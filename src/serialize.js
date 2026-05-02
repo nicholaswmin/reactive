@@ -1,5 +1,5 @@
 import { rawOf, rootFor, isReactive, isPlainObject } from './internals.js'
-import { IdentifiedList, ITEM_ID, ensureItemId, assignItemId } from './identity.js'
+import { IdentifiedList, ITEM_ID, ensureItemId } from './identity.js'
 import { pathKey, pathFrom } from './path.js'
 
 const cloneData = value => {
@@ -37,16 +37,10 @@ const clone = value => {
     return items
   }
 
-  if (isPlainObject(raw)) {
-    const cloned = Object.fromEntries(
+  if (isPlainObject(raw))
+    return Object.fromEntries(
       Object.entries(raw).map(([key, child]) => [key, clone(child)])
     )
-
-    if (raw[ITEM_ID])
-      assignItemId(cloned, raw[ITEM_ID])
-
-    return cloned
-  }
 
   return raw
 }

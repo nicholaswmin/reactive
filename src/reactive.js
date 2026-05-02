@@ -246,6 +246,10 @@ const hydrate = (value, registry) => {
   if (Array.isArray(value)) {
     const items = value.map(child => hydrate(child, registry))
 
+    for (const item of items)
+      if (isPlainObject(item) && '$iid' in item)
+        delete item.$iid
+
     if (items.length && items.every(isPlainObject)) {
       const list = new IdentifiedList()
 
@@ -258,7 +262,6 @@ const hydrate = (value, registry) => {
         else
           ensureItemId(item)
 
-        delete item.$iid
         Array.prototype.push.call(list, item)
       }
 
