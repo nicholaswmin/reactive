@@ -1,307 +1,205 @@
-const randomUUID = () => crypto.randomUUID()
+import {
+  randomUUID,
+  EVENTS,
+  ARRAY_MUTATORS,
+  SYNC_TIMEOUT_MS,
+  STALE_REFERENCE_ERROR,
+  REGISTRIES,
+  ROOTS,
+  PROXIES,
+  TARGETS,
+  rawOf,
+  rootFor,
+  isObject,
+  isPlainObject,
+  isContainer,
+  storeFor,
+  liveFor,
+} from '#internals'
+import {
+  IdentifiedList, ITEM_ID, assignItemId, ensureItemId,
+} from '#identity'
+import {
+  isIndexKey, pathKey, valueAtPath, setAtPath, deleteAtPath,
+  resolveIdentifiedItemExists, samePath,
+} from '#path'
+import {
+  compareVersion, versionAt, newerAncestor, newerDescendant,
+  rememberVersion, nextVersion, cloneVersions,
+} from '#version'
+import { clone, serializeValue, versionsFrom } from '#serialize'
+import {
+  storeSnapshot, buildSnapshotGraph, buildCachedSnapshotGraph,
+  mergeSnapshotState,
+} from '#snapshot'
 
-const EVENTS = {
-  delta: 'reactive:delta',
-  request: 'reactive:snapshot:request',
-  response: 'reactive:snapshot:response',
+const assertLiveTarget = (record, path, target) => {
+  if (!path.length)
+    return
+
+  if (rawOf(valueAtPath(record.target, path)) !== target)
+    throw new Error(STALE_REFERENCE_ERROR)
 }
 
-const ARRAY_MUTATORS = new Set([
-  'copyWithin',
-  'fill',
-  'pop',
-  'push',
-  'reverse',
-  'shift',
-  'sort',
-  'splice',
-  'unshift',
-])
-
-const STORES = new WeakMap()
-const REGISTRIES = new WeakMap()
-const ROOTS = new WeakMap()
-const PROXIES = new WeakMap()
-const TARGETS = new WeakMap()
-const SEP = '\u001f'
-
-const className = Ctor => Ctor.name
-const pathKey = path => path.join(SEP)
-const pathFrom = key => key ? key.split(SEP) : []
-const graphKey = (Ctor, id) => `${className(Ctor)}:${id}`
-const isObject = value => value != null && typeof value === 'object'
-const isPlainObject = value => isObject(value) && (
-  Object.getPrototypeOf(value) === Object.prototype ||
-  Object.getPrototypeOf(value) === null
-)
-const isContainer = value => Array.isArray(value) || isPlainObject(value)
-
-const compareVersion = (left, right) => {
-  if (!left && !right)
-    return 0
-
-  if (!left)
-    return -1
-
-  if (!right)
-    return 1
-
-  if (left.tick !== right.tick)
-    return left.tick - right.tick
-
-  return left.context.localeCompare(right.context)
-}
-
-const storeFor = Ctor => {
-  let store = STORES.get(Ctor)
-
-  if (store)
-    return store
-
-  store = {
-    bus: null,
-    cleanup: [],
-    clock: 0,
-    context: randomUUID(),
-    refs: new Map(),
-    snapshots: new Map(),
-    waiters: new Map(),
-  }
-
-  store.finalizer = new FinalizationRegistry(({ id, refs }) =>
-    refs.delete(id)
-  )
-
-  STORES.set(Ctor, store)
-
-  return store
-}
-
-const rootFor = value => ROOTS.get(value)
-const isReactive = value => ROOTS.has(value)
-const rawOf = value => TARGETS.get(value) ?? value
-
-const clone = value => {
-  if (isReactive(value))
-    return value
-
-  const raw = rawOf(value)
-
-  if (Array.isArray(raw))
-    return raw.map(clone)
-
-  if (isPlainObject(raw))
-    return Object.fromEntries(
-      Object.entries(raw).map(([key, child]) => [key, clone(child)])
-    )
-
-  return raw
-}
-
-const serializeValue = value => {
-  if (isReactive(value)) {
-    const root = rootFor(value)
-
-    return { $ref: className(root.Ctor), id: root.id }
-  }
-
-  const raw = rawOf(value)
-
-  if (Array.isArray(raw))
-    return raw.map(serializeValue)
-
-  if (isPlainObject(raw))
-    return Object.fromEntries(
-      Object.entries(raw).map(([key, child]) => [key, serializeValue(child)])
-    )
-
-  return raw
-}
-
-const serializeSnapshotValue = (value, visit) => {
-  if (isReactive(value)) {
-    const root = rootFor(value)
-
-    visit(root)
-
-    return { $ref: className(root.Ctor), id: root.id }
-  }
-
-  const raw = rawOf(value)
-
-  if (Array.isArray(raw))
-    return raw.map(child => serializeSnapshotValue(child, visit))
-
-  if (isPlainObject(raw))
-    return Object.fromEntries(
-      Object.entries(raw)
-        .map(([key, child]) => [key, serializeSnapshotValue(child, visit)])
-    )
-
-  return raw
-}
-
-const serializeRecordData = (record, visit = () => {}) =>
-  Object.fromEntries(
-    Object.entries(record.target)
-      .map(([key, value]) => [key, serializeSnapshotValue(value, visit)])
-  )
-
-const serializeVersions = versions =>
-  [...versions.entries()].map(([key, version]) => ({
-    path: pathFrom(key),
-    version,
-  }))
-
-const versionsFrom = entries =>
-  new Map(entries.map(({ path, version }) => [pathKey(path), version]))
-
-const snapshotFor = record => ({
-  data: serializeRecordData(record),
-  versions: serializeVersions(record.versions),
-})
-
-const storeSnapshot = record => {
-  record.store.snapshots.set(record.id, snapshotFor(record))
-}
-
-const buildSnapshotGraph = record => {
-  const refs = []
-  const seen = new Set()
-
-  const visit = current => {
-    const key = graphKey(current.Ctor, current.id)
-
-    if (seen.has(key))
-      return
-
-    seen.add(key)
-
-    refs.push({
-      class: className(current.Ctor),
-      id: current.id,
-      data: serializeRecordData(current, visit),
-      versions: serializeVersions(current.versions),
-    })
-  }
-
-  const root = {
-    class: className(record.Ctor),
+const emitDelta = (record, payload) =>
+  record.store.bus?.send(EVENTS.delta, {
+    class: record.store.type,
     id: record.id,
-    data: serializeRecordData(record, visit),
-    versions: serializeVersions(record.versions),
-  }
+    ...payload,
+  })
 
-  return { ...root, refs }
+const localSet = (record, path, value) => {
+  const version = nextVersion(record.store)
+
+  rememberVersion(record, path, version)
+  storeSnapshot(record)
+  emitDelta(record, {
+    path,
+    value: serializeValue(value, true),
+    version,
+  })
 }
 
-const rememberVersion = (record, path, version) => {
-  const key = pathKey(path)
-  const prefix = key ? `${key}${SEP}` : ''
+const localOp = (record, path, op, args, baseVersion) => {
+  const version = nextVersion(record.store)
 
-  for (const existing of [...record.versions.keys()]) {
-    if (existing === key || existing.startsWith(prefix))
-      record.versions.delete(existing)
-  }
-
-  record.versions.set(key, version)
-
-  if (record.store.clock < version.tick)
-    record.store.clock = version.tick
+  rememberVersion(record, path, version)
+  storeSnapshot(record)
+  emitDelta(record, {
+    args: args.map(arg => serializeValue(arg, true)),
+    baseVersion,
+    op,
+    path,
+    version,
+  })
 }
 
-const newerAncestor = (record, path, version) =>
-  path.some((_, index) =>
-    compareVersion(
-      record.versions.get(pathKey(path.slice(0, index))),
-      version
-    ) > 0
-  )
+const localDelete = (record, path) => {
+  const version = nextVersion(record.store)
 
-const newerDescendant = (record, path, version) => {
-  const key = pathKey(path)
-  const prefix = key ? `${key}${SEP}` : ''
+  rememberVersion(record, path, version)
+  storeSnapshot(record)
+  emitDelta(record, {
+    deleted: true,
+    path,
+    version,
+  })
+}
 
-  for (const [entry, current] of record.versions) {
-    if ((entry === key || entry.startsWith(prefix)) &&
-      compareVersion(current, version) > 0)
+const replicateBoundary = (record, boundary) =>
+  localSet(record, boundary, valueAtPath(record.target, boundary))
+
+const proxify = (target, record, path, boundary) => {
+  const existing = PROXIES.get(target)
+
+  if (existing)
+    return existing
+
+  const proxy = new Proxy(target, {
+    deleteProperty(target, prop) {
+      assertLiveTarget(record, path, target)
+
+      const existed = Reflect.has(target, prop)
+      const deleted = Reflect.deleteProperty(target, prop)
+
+      if (!deleted || !existed)
+        return deleted
+
+      if (boundary)
+        replicateBoundary(record, boundary)
+      else
+        localDelete(record, [...path, String(prop)])
+
       return true
-  }
+    },
+    get(target, prop, receiver) {
+      const value = Reflect.get(target, prop, receiver)
 
-  return false
-}
+      if (
+        Array.isArray(target) &&
+        typeof prop === 'string' &&
+        ARRAY_MUTATORS.has(prop)
+      )
+        return (...args) => {
+          assertLiveTarget(record, path, target)
 
-const nextVersion = store => ({
-  tick: ++store.clock,
-  context: store.context,
-})
+          const cloned = args.map(clone)
 
-const eventPath = (target, path, emit, prop) =>
-  Array.isArray(target) || pathKey(path) !== pathKey(emit)
-    ? emit
-    : [...path, String(prop)]
+          if (target instanceof IdentifiedList) {
+            for (const arg of cloned)
+              if (isPlainObject(arg)) ensureItemId(arg)
+          }
 
-const valueAtPath = (target, path) =>
-  path.reduce((value, segment) => rawOf(value?.[segment]), target)
+          const result = Array.prototype[prop].apply(target, cloned)
 
-const setAtPath = (target, path, value) => {
-  if (path.length === 1) {
-    target[path[0]] = value
-    return
-  }
+          if (boundary && samePath(path, boundary))
+            localOp(record, path, prop, cloned, versionAt(record.versions, path))
+          else if (boundary)
+            replicateBoundary(record, boundary)
+          else
+            localSet(record, path, valueAtPath(record.target, path))
 
-  let cursor = target
+          return result === target ? receiver : result
+        }
 
-  for (const [index, segment] of path.slice(0, -1).entries()) {
-    const next = path[index + 1]
-    const current = rawOf(cursor[segment])
+      if (!isContainer(rawOf(value)))
+        return value
 
-    if (!isContainer(current))
-      cursor[segment] = /^\d+$/.test(next) ? [] : {}
+      let nextPath = [...path, String(prop)]
+      const nextRaw = rawOf(value)
 
-    cursor = rawOf(cursor[segment])
-  }
+      if (target instanceof IdentifiedList && isIndexKey(String(prop))) {
+        const iid = nextRaw?.[ITEM_ID]
 
-  cursor[path.at(-1)] = value
-}
+        if (iid)
+          nextPath = [...path, iid]
+      }
 
-const deleteAtPath = (target, path) => {
-  if (path.length === 1) {
-    delete target[path[0]]
-    return
-  }
+      const isStable = nextRaw instanceof IdentifiedList
+      const nextBoundary = boundary ?? (
+        !isStable && Array.isArray(nextRaw) ? nextPath : null
+      )
 
-  const parent = valueAtPath(target, path.slice(0, -1))
+      return proxify(nextRaw, record, nextPath, nextBoundary)
+    },
+    set(target, prop, value, receiver) {
+      assertLiveTarget(record, path, target)
 
-  if (parent && typeof parent === 'object')
-    delete parent[path.at(-1)]
-}
+      const next = clone(value)
 
-const resolveWaiters = (store, id, value) => {
-  const waiters = store.waiters.get(id) ?? []
+      if (target instanceof IdentifiedList &&
+        isIndexKey(String(prop)) && isPlainObject(next))
+        ensureItemId(next)
 
-  store.waiters.delete(id)
+      const changed = Reflect.set(target, prop, next, receiver)
 
-  for (const resolve of waiters)
-    resolve(value)
-}
+      if (!changed)
+        return false
 
-const liveFor = (Ctor, id) => {
-  const store = storeFor(Ctor)
-  const ref = store.refs.get(id)
-  const value = ref?.deref()
+      if (target instanceof IdentifiedList && !boundary)
+        localSet(record, path, valueAtPath(record.target, path))
+      else if (boundary)
+        replicateBoundary(record, boundary)
+      else
+        localSet(record, [...path, String(prop)], next)
 
-  if (!value)
-    store.refs.delete(id)
+      return true
+    },
+  })
 
-  return value
+  PROXIES.set(target, proxy)
+  TARGETS.set(proxy, target)
+
+  return proxy
 }
 
 const createRecord = (Ctor, id) => {
   const store = storeFor(Ctor)
   const target = Object.create(Ctor.prototype)
   const record = {
+    authoritative: false,
     Ctor,
+    complete: false,
     id,
     proxy: null,
     store,
@@ -309,13 +207,12 @@ const createRecord = (Ctor, id) => {
     versions: new Map(),
   }
 
-  const proxy = proxify(target, record, [], [])
+  const proxy = proxify(target, record, [], null)
 
   record.proxy = proxy
 
   ROOTS.set(target, record)
   ROOTS.set(proxy, record)
-  TARGETS.set(proxy, target)
 
   store.refs.set(id, new WeakRef(proxy))
   store.finalizer.register(proxy, { id, refs: store.refs }, proxy)
@@ -346,8 +243,33 @@ const hydrate = (value, registry) => {
     return recordForId(Ctor, value.id).proxy
   }
 
-  if (Array.isArray(value))
-    return value.map(child => hydrate(child, registry))
+  if (Array.isArray(value)) {
+    const items = value.map(child => hydrate(child, registry))
+
+    for (const item of items)
+      if (isPlainObject(item) && '$iid' in item)
+        delete item.$iid
+
+    if (items.length && items.every(isPlainObject)) {
+      const list = new IdentifiedList()
+
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i]
+        const wire = value[i]?.$iid
+
+        if (wire)
+          assignItemId(item, wire)
+        else
+          ensureItemId(item)
+
+        Array.prototype.push.call(list, item)
+      }
+
+      return list
+    }
+
+    return items
+  }
 
   if (isPlainObject(value))
     return Object.fromEntries(
@@ -365,8 +287,10 @@ const replaceState = (record, data, versions = []) => {
   for (const [key, value] of Object.entries(data))
     record.target[key] = hydrate(value, record.store.registry)
 
+  record.authoritative = true
+  record.complete = true
   record.versions = versions instanceof Map
-    ? new Map(versions)
+    ? cloneVersions(versions)
     : versionsFrom(versions)
 
   for (const version of record.versions.values()) {
@@ -377,89 +301,14 @@ const replaceState = (record, data, versions = []) => {
   storeSnapshot(record)
 }
 
-const localSet = (record, path, value) => {
-  const version = nextVersion(record.store)
+const applySnapshotState = (record, data, versions) => {
+  const remoteVersions = versions instanceof Map
+    ? versions
+    : versionsFrom(versions)
 
-  rememberVersion(record, path, version)
-  storeSnapshot(record)
+  const next = mergeSnapshotState(record, data, remoteVersions)
 
-  record.store.bus?.send(EVENTS.delta, {
-    class: className(record.Ctor),
-    id: record.id,
-    path,
-    value: serializeValue(value),
-    version,
-  })
-}
-
-const localOp = (record, path, op, args) => {
-  const version = nextVersion(record.store)
-
-  rememberVersion(record, path, version)
-  storeSnapshot(record)
-
-  record.store.bus?.send(EVENTS.delta, {
-    class: className(record.Ctor),
-    id: record.id,
-    path,
-    op,
-    args: args.map(serializeValue),
-    version,
-  })
-}
-
-const localDelete = (record, path) => {
-  const version = nextVersion(record.store)
-
-  rememberVersion(record, path, version)
-  storeSnapshot(record)
-
-  record.store.bus?.send(EVENTS.delta, {
-    class: className(record.Ctor),
-    deleted: true,
-    id: record.id,
-    path,
-    version,
-  })
-}
-
-const applyRemoteSet = (record, path, value, version) => {
-  if (
-    compareVersion(record.versions.get(pathKey(path)), version) >= 0 ||
-    newerAncestor(record, path, version) ||
-    newerDescendant(record, path, version)
-  )
-    return
-
-  setAtPath(record.target, path, hydrate(value, record.store.registry))
-  rememberVersion(record, path, version)
-  storeSnapshot(record)
-}
-
-const applyRemoteDelete = (record, path, version) => {
-  if (
-    compareVersion(record.versions.get(pathKey(path)), version) >= 0 ||
-    newerAncestor(record, path, version) ||
-    newerDescendant(record, path, version)
-  )
-    return
-
-  deleteAtPath(record.target, path)
-  rememberVersion(record, path, version)
-  storeSnapshot(record)
-}
-
-const applyRemoteOp = (record, path, op, args, version) => {
-  const target = valueAtPath(record.target, path)
-
-  if (!Array.isArray(target))
-    return
-
-  Array.prototype[op].apply(
-    target, args.map(a => hydrate(a, record.store.registry))
-  )
-  rememberVersion(record, path, version)
-  storeSnapshot(record)
+  replaceState(record, next.data, next.versions)
 }
 
 const applySnapshotMessage = (message, registry) => {
@@ -468,26 +317,177 @@ const applySnapshotMessage = (message, registry) => {
   if (!rootCtor)
     return null
 
-  recordForId(rootCtor, message.id)
+  const root = recordForId(rootCtor, message.id)
 
   for (const ref of message.refs ?? []) {
     const Ctor = registry.get(ref.class)
 
-    if (!Ctor)
-      continue
-
-    replaceState(recordForId(Ctor, ref.id), ref.data, ref.versions)
+    if (Ctor)
+      recordForId(Ctor, ref.id)
   }
 
-  const root = recordForId(rootCtor, message.id)
+  for (const ref of message.refs ?? []) {
+    const Ctor = registry.get(ref.class)
 
-  replaceState(root, message.data, message.versions)
+    if (Ctor)
+      applySnapshotState(recordForId(Ctor, ref.id), ref.data, ref.versions)
+  }
+
+  applySnapshotState(root, message.data, message.versions)
 
   return root.proxy
 }
 
+const clearPending = (store, id) => {
+  const pending = store.pending.get(id)
+
+  if (!pending)
+    return null
+
+  store.pending.delete(id)
+  clearTimeout(pending.timer)
+
+  return pending
+}
+
+const requestSnapshot = (Ctor, id) => {
+  const store = storeFor(Ctor)
+  const existing = store.pending.get(id)
+
+  if (existing)
+    return existing.promise
+
+  if (!store.bus)
+    throw new Error(`Cannot sync ${store.type} without a bus`)
+
+  const requestId = randomUUID()
+  let resolve
+  let reject
+  const promise = new Promise((nextResolve, nextReject) => {
+    resolve = nextResolve
+    reject = nextReject
+  })
+  const timeoutMs = Number.isInteger(Ctor.syncTimeoutMs)
+    ? Ctor.syncTimeoutMs
+    : SYNC_TIMEOUT_MS
+  const timer = setTimeout(() => {
+    const pending = clearPending(store, id)
+
+    if (pending)
+      pending.reject(
+        pending.missingError ??
+        new Error(`Timed out syncing ${store.type}:${id}`)
+      )
+  }, timeoutMs)
+
+  store.pending.set(id, {
+    missingError: null,
+    promise,
+    reject,
+    requestId,
+    resolve,
+    timer,
+  })
+
+  store.bus.send(EVENTS.request, {
+    class: store.type,
+    id,
+    requestId,
+  })
+
+  return promise
+}
+
+const requestRepair = record => {
+  if (!record.store.bus)
+    return
+
+  record.authoritative = false
+  storeSnapshot(record)
+  requestSnapshot(record.Ctor, record.id).catch(() => {})
+}
+
+const canApplyRemote = (record, path, version) => {
+  if (
+    compareVersion(record.versions.get(pathKey(path)), version) >= 0 ||
+    newerAncestor(record, path, version) ||
+    newerDescendant(record, path, version)
+  )
+    return false
+
+  if (!resolveIdentifiedItemExists(record.target, path)) {
+    requestRepair(record)
+    return false
+  }
+
+  return true
+}
+
+const applyRemoteSet = (record, path, value, version) => {
+  if (!canApplyRemote(record, path, version))
+    return false
+
+  setAtPath(record.target, path, hydrate(value, record.store.registry))
+  rememberVersion(record, path, version)
+  storeSnapshot(record)
+
+  return true
+}
+
+const applyRemoteDelete = (record, path, version) => {
+  if (!canApplyRemote(record, path, version))
+    return false
+
+  deleteAtPath(record.target, path)
+  rememberVersion(record, path, version)
+  storeSnapshot(record)
+
+  return true
+}
+
+const applyRemoteOp = (record, path, op, args, baseVersion, version) => {
+  const currentVersion = versionAt(record.versions, path)
+
+  if (
+    compareVersion(currentVersion, version) >= 0 ||
+    newerAncestor(record, path, version) ||
+    newerDescendant(record, path, version)
+  )
+    return false
+
+  if (compareVersion(currentVersion, baseVersion) !== 0) {
+    requestRepair(record)
+    return false
+  }
+
+  const target = valueAtPath(record.target, path)
+
+  if (!Array.isArray(target)) {
+    if (compareVersion(currentVersion, version) < 0)
+      requestRepair(record)
+
+    return false
+  }
+
+  if (target instanceof IdentifiedList) {
+    requestRepair(record)
+    return false
+  }
+
+  Array.prototype[op].apply(
+    target,
+    args.map(arg => hydrate(arg, record.store.registry))
+  )
+  rememberVersion(record, path, version)
+  storeSnapshot(record)
+
+  return true
+}
+
 const handleDelta = (Ctor, message) => {
-  if (message.class !== className(Ctor))
+  const store = storeFor(Ctor)
+
+  if (message.class !== store.type)
     return
 
   const record = recordForId(Ctor, message.id)
@@ -495,119 +495,69 @@ const handleDelta = (Ctor, message) => {
   if (message.deleted)
     applyRemoteDelete(record, message.path, message.version)
   else if (message.op)
-    applyRemoteOp(record, message.path, message.op, message.args, message.version)
+    applyRemoteOp(
+      record,
+      message.path,
+      message.op,
+      message.args,
+      message.baseVersion,
+      message.version,
+    )
   else
     applyRemoteSet(record, message.path, message.value, message.version)
-
-  resolveWaiters(record.store, record.id, record.proxy)
 }
 
 const handleRequest = (Ctor, message) => {
-  if (message.class !== className(Ctor))
+  const store = storeFor(Ctor)
+
+  if (message.class !== store.type)
     return
 
   const live = liveFor(Ctor, message.id)
-  const snapshot = live
-    ? buildSnapshotGraph(rootFor(live))
-    : storeFor(Ctor).snapshots.get(message.id)
+  const liveRecord = live ? rootFor(live) : null
+  const snapshot = liveRecord?.complete && liveRecord.authoritative
+    ? buildSnapshotGraph(liveRecord)
+    : buildCachedSnapshotGraph(Ctor, message.id, store.registry)
 
-  if (!snapshot)
-    return
-
-  storeFor(Ctor).bus?.send(EVENTS.response, {
-    ...snapshot,
-    class: className(Ctor),
-    id: message.id,
-    requestId: message.requestId,
-  })
+  store.bus?.send(EVENTS.response, snapshot
+    ? {
+        ...snapshot,
+        requestId: message.requestId,
+      }
+    : {
+        class: store.type,
+        id: message.id,
+        missing: true,
+        requestId: message.requestId,
+      })
 }
 
 const handleResponse = (Ctor, message) => {
-  if (message.class !== className(Ctor))
+  const store = storeFor(Ctor)
+
+  if (message.class !== store.type)
     return
 
-  const instance = applySnapshotMessage(message, storeFor(Ctor).registry)
+  const pending = store.pending.get(message.id)
 
-  if (instance)
-    resolveWaiters(storeFor(Ctor), message.id, instance)
-}
+  if (!pending || pending.requestId !== message.requestId)
+    return
 
-const proxify = (target, record, path, emit) => {
-  const existing = PROXIES.get(target)
+  if (message.missing) {
+    pending.missingError = new Error(`Unknown ${store.type}:${message.id}`)
+    return
+  }
 
-  if (existing)
-    return existing
+  clearPending(store, message.id)
 
-  const proxy = new Proxy(target, {
-    deleteProperty(target, prop) {
-      const existed = Reflect.has(target, prop)
-      const deleted = Reflect.deleteProperty(target, prop)
+  const instance = applySnapshotMessage(message, store.registry)
 
-      if (!deleted || !existed)
-        return deleted
+  if (!instance) {
+    pending.reject(new Error(`Cannot hydrate ${store.type}:${message.id}`))
+    return
+  }
 
-      const next = eventPath(target, path, emit, prop)
-
-      if (pathKey(next) === pathKey(emit) && (
-        Array.isArray(target) || pathKey(path) !== pathKey(emit)
-      ))
-        localSet(record, emit, valueAtPath(record.target, emit))
-      else
-        localDelete(record, next)
-
-      return true
-    },
-    get(target, prop, receiver) {
-      const value = Reflect.get(target, prop, receiver)
-
-      if (
-        Array.isArray(target) &&
-        typeof prop === 'string' &&
-        ARRAY_MUTATORS.has(prop)
-      )
-        return (...args) => {
-          const cloned = args.map(clone)
-          const result = Array.prototype[prop].apply(target, cloned)
-
-          localOp(record, emit, prop, cloned)
-
-          return result
-        }
-
-      if (!isContainer(rawOf(value)))
-        return value
-
-      const nextPath = [...path, String(prop)]
-      const nextEmit = Array.isArray(target) || pathKey(path) !== pathKey(emit)
-        ? emit
-        : nextPath
-
-      return proxify(rawOf(value), record, nextPath, nextEmit)
-    },
-    set(target, prop, value, receiver) {
-      const next = clone(value)
-      const changed = Reflect.set(target, prop, next, receiver)
-
-      if (!changed)
-        return false
-
-      const mutation = eventPath(target, path, emit, prop)
-
-      if (pathKey(mutation) === pathKey(emit) && (
-        Array.isArray(target) || pathKey(path) !== pathKey(emit)
-      ))
-        localSet(record, emit, valueAtPath(record.target, emit))
-      else
-        localSet(record, mutation, next)
-
-      return true
-    },
-  })
-
-  PROXIES.set(target, proxy)
-  TARGETS.set(proxy, target)
-
-  return proxy
+  pending.resolve(instance)
 }
 
 const parseArgs = (id, data) =>
@@ -629,7 +579,7 @@ export class Reactive {
 
     const record = createRecord(Ctor, value)
 
-    replaceState(record, clone(state), [])
+    replaceState(record, clone(state))
 
     return record.proxy
   }
@@ -637,54 +587,50 @@ export class Reactive {
   static sync(id) {
     const Ctor = this
     const live = liveFor(Ctor, id)
+    const record = live ? rootFor(live) : null
 
-    if (live)
+    if (record?.complete && record.authoritative)
       return Promise.resolve(live)
 
     const store = storeFor(Ctor)
-    const snapshot = store.snapshots.get(id)
+    const snapshot = buildCachedSnapshotGraph(Ctor, id, store.registry)
 
     if (snapshot) {
-      const record = recordForId(Ctor, id)
+      const instance = applySnapshotMessage(snapshot, store.registry)
 
-      replaceState(record, snapshot.data, snapshot.versions)
-
-      return Promise.resolve(record.proxy)
+      if (instance)
+        return Promise.resolve(instance)
     }
 
-    if (!store.bus)
-      throw new Error(`Cannot sync ${className(Ctor)} without a bus`)
-
-    const waiting = store.waiters.get(id) ?? []
-
-    store.waiters.set(id, waiting)
-
-    const promise = new Promise(resolve => waiting.push(resolve))
-
-    store.bus.send(EVENTS.request, {
-      class: className(Ctor),
-      id,
-      requestId: randomUUID(),
-    })
-
-    return promise
+    return requestSnapshot(Ctor, id)
   }
 
   static use(bus) {
     const store = storeFor(this)
+    const registry = bus
+      ? REGISTRIES.get(bus) ?? new Map()
+      : null
+    const current = registry?.get(store.type)
+
+    if (current && current !== this)
+      throw new Error(`Reactive type "${store.type}" already registered`)
 
     for (const cleanup of store.cleanup)
       cleanup()
 
-    store.bus = bus
     store.cleanup = []
 
-    if (bus) {
-      const registry = REGISTRIES.get(bus) ?? new Map()
+    if (store.registry.get(store.type) === this)
+      store.registry.delete(store.type)
 
+    store.bus = bus
+
+    if (bus) {
       REGISTRIES.set(bus, registry)
-      registry.set(className(this), this)
+      registry.set(store.type, this)
       store.registry = registry
+    } else {
+      store.registry = new Map([[store.type, this]])
     }
 
     if (!bus?.on)

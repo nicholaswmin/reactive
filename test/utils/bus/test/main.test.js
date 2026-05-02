@@ -17,7 +17,7 @@ test('Bus', async t => {
 
       t.a.send('delta', { id: 'abc', path: ['name'] })
 
-      t.assert.deepEqual(await received, {
+      t.assert.deepStrictEqual(await received, {
         id: 'abc',
         path: ['name'],
       })
@@ -29,17 +29,19 @@ test('Bus', async t => {
 
       t.b.send('delta', { from: 'b' })
 
-      t.assert.deepEqual(await received, { from: 'b' })
+      t.assert.deepStrictEqual(await received, { from: 'b' })
     })
 
     await t.test('preserves message order', async t => {
-      const values = []
+      const expected = [1, 2, 3]
+
+      t.plan(expected.length)
 
       const done = new Promise(resolve => {
         t.b.on('delta', v => {
-          values.push(v)
+          t.assert.strictEqual(v, expected.shift())
 
-          if (values.length === 3)
+          if (!expected.length)
             resolve()
         })
       })
@@ -48,15 +50,13 @@ test('Bus', async t => {
       t.a.send('delta', 2)
       t.a.send('delta', 3)
       await done
-
-      t.assert.deepEqual(values, [1, 2, 3])
     })
 
     await t.test('records sent messages', async t => {
       t.a.send('delta', { v: 1 })
       t.a.send('delta', { v: 2 })
 
-      t.assert.deepEqual(t.a.sent, [
+      t.assert.deepStrictEqual(t.a.sent, [
         { event: 'delta', payload: { v: 1 } },
         { event: 'delta', payload: { v: 2 } },
       ])
@@ -80,14 +80,14 @@ test('Bus', async t => {
       t.a.send('delta', { v: 1 })
       await Bus.flush()
 
-      t.assert.equal(received, false)
+      t.assert.strictEqual(received, false)
     })
 
     await t.test('still records to sent', async t => {
       t.a.drop()
       t.a.send('delta', { v: 1 })
 
-      t.assert.equal(t.a.sent.length, 1)
+      t.assert.strictEqual(t.a.sent.length, 1)
     })
 
     await t.test('resumes after pass', async t => {
@@ -101,7 +101,7 @@ test('Bus', async t => {
       t.a.pass()
       t.a.send('delta', { v: 'ok' })
 
-      t.assert.deepEqual(await received, { v: 'ok' })
+      t.assert.deepStrictEqual(await received, { v: 'ok' })
     })
   })
 
@@ -116,7 +116,7 @@ test('Bus', async t => {
       a.send('delta', {})
       await Bus.flush()
 
-      t.assert.equal(count, 2)
+      t.assert.strictEqual(count, 2)
     })
 
     await t.test('cleanup removes individual listener', async t => {
@@ -130,7 +130,7 @@ test('Bus', async t => {
       a.send('delta', {})
       await Bus.flush()
 
-      t.assert.equal(count, 1)
+      t.assert.strictEqual(count, 1)
     })
   })
 })

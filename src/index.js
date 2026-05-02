@@ -1,1 +1,1 @@
-export { Reactive } from './reactive.js'
+export { Reactive } from '#reactive'
