@@ -1,6 +1,7 @@
 {
-  "name": "reactive",
+  "name": "@nicholaswmin/reactive",
   "version": "0.1.0",
+  "description": "Replicated reactive models with native ergonomics and efficient updates",
   "license": "MIT",
   "type": "module",
   "engines": {
@@ -10,6 +11,12 @@
   "imports": {
     "#*": "./src/*.js"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nicholaswmin/reactive.git"
+  },
+  "homepage": "https://github.com/nicholaswmin/reactive#readme",
+  "bugs": "https://github.com/nicholaswmin/reactive/issues",
   "scripts": {
     "test": "node --test \"test/**/*.test.js\"",
     "test:cov": "node --test --experimental-test-coverage \"test/**/*.test.js\"",
