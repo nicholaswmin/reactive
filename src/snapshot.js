@@ -160,12 +160,15 @@ const mergeIdentifiedList = (
 ) => {
   const localItems = new Map(localValue.map(item => [itemIdOf(item), item]))
   const remoteItems = new Map(remoteValue.map(item => [itemIdOf(item), item]))
+  const seen = new Set()
   const ids = []
   const add = item => {
     const id = itemIdOf(item)
 
-    if (id && !ids.includes(id))
+    if (id && !seen.has(id)) {
+      seen.add(id)
       ids.push(id)
+    }
   }
 
   for (const item of compareVersion(localExact, remoteExact) > 0
