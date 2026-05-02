@@ -33,6 +33,13 @@ const commandsFor = (model, gen) => {
       },
     },
     {
+      name: 'delete name',
+      run: user => {
+        delete user.name
+        delete model.name
+      },
+    },
+    {
       name: 'set age',
       run: user => {
         const age = gen.int(90)
@@ -92,6 +99,13 @@ const commandsFor = (model, gen) => {
         model.tags = tags
       },
     },
+    {
+      name: 'clear tags',
+      run: user => {
+        user.tags = []
+        model.tags = []
+      },
+    },
   ]
 
   if (model.address) {
@@ -126,6 +140,22 @@ const commandsFor = (model, gen) => {
       },
     })
     commands.push({
+      name: 'unshift tag',
+      run: user => {
+        const tag = gen.words.next().value
+
+        user.tags.unshift(tag)
+        model.tags.unshift(tag)
+      },
+    })
+    commands.push({
+      name: 'shift tag',
+      run: user => {
+        user.tags.shift()
+        model.tags.shift()
+      },
+    })
+    commands.push({
       name: 'set tag index',
       run: user => {
         const index = gen.int(model.tags.length)
@@ -143,6 +173,17 @@ const commandsFor = (model, gen) => {
 
         user.tags.splice(index, 1, tag)
         model.tags.splice(index, 1, tag)
+      },
+    })
+    commands.push({
+      name: 'fill tags',
+      run: user => {
+        const tag = gen.words.next().value
+        const start = gen.int(model.tags.length)
+        const end = start + gen.int(model.tags.length - start + 1)
+
+        user.tags.fill(tag, start, end)
+        model.tags.fill(tag, start, end)
       },
     })
     commands.push({

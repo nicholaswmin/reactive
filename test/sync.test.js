@@ -7,36 +7,6 @@ import {
   createLinkedContexts,
 } from './utils/context/index.js'
 
-const createBroadcastPeer = hub => {
-  const peer = {
-    handlers: new Map(),
-    sent: [],
-    send(event, payload) {
-      this.sent.push({ event, payload })
-
-      for (const target of hub.peers)
-        if (target !== this)
-          queueMicrotask(() => target.receive(event, payload))
-    },
-    on(event, handler) {
-      const listeners = this.handlers.get(event) ?? new Set()
-
-      listeners.add(handler)
-      this.handlers.set(event, listeners)
-
-      return () => listeners.delete(handler)
-    },
-    receive(event, payload) {
-      for (const handler of this.handlers.get(event) ?? [])
-        handler(payload)
-    },
-  }
-
-  hub.peers.push(peer)
-
-  return peer
-}
-
 test('Reactive', async t => {
   await t.test('#sync', async t => {
     t.beforeEach(t => {
@@ -74,6 +44,50 @@ test('Reactive', async t => {
         const remote = await b.User.sync('nested')
 
         t.assert.strictEqual(remote.address.city, 'London')
+      })
+
+      await t.test('does not resolve from a non-authoritative shell', async t => {
+        const { User } = createContext()
+        const { a: bus } = Bus.createPair()
+
+        User.use(bus)
+        bus.receive('reactive:delta', {
+          class: 'User',
+          id: 'shell',
+          path: ['name'],
+          value: 'B',
+          version: { tick: 1, context: 'remote' },
+        })
+        await Bus.flush()
+
+        const pending = User.sync('shell')
+        const requestMessage = bus.sent.findLast(message =>
+          message.event === 'reactive:snapshot:request' &&
+          message.payload.id === 'shell')
+        let settled = false
+
+        t.assert.ok(requestMessage)
+
+        pending.finally(() => {
+          settled = true
+        })
+        await Bus.flush()
+
+        t.assert.strictEqual(settled, false)
+
+        bus.receive('reactive:snapshot:response', {
+          class: 'User',
+          id: 'shell',
+          requestId: requestMessage.payload.requestId,
+          data: { age: 1, name: 'B' },
+          refs: [],
+          versions: [],
+        })
+
+        const remote = await pending
+
+        t.assert.strictEqual(remote.name, 'B')
+        t.assert.strictEqual(remote.age, 1)
       })
 
       await t.test('waits for a matching snapshot response', async t => {
@@ -119,6 +133,46 @@ test('Reactive', async t => {
         t.assert.strictEqual(remote.age, 1)
       })
 
+      await t.test('prefers a later matching snapshot over an earlier missing response', async t => {
+        const { User } = createContext()
+        const { a: bus } = Bus.createPair()
+
+        User.use(bus)
+
+        const pending = User.sync('late')
+        const requestMessage = bus.sent.at(-1)
+        let settled = false
+
+        t.assert.ok(requestMessage)
+
+        pending.finally(() => {
+          settled = true
+        })
+
+        bus.receive('reactive:snapshot:response', {
+          class: 'User',
+          id: 'late',
+          missing: true,
+          requestId: requestMessage.payload.requestId,
+        })
+        await Bus.flush()
+
+        t.assert.strictEqual(settled, false)
+
+        bus.receive('reactive:snapshot:response', {
+          class: 'User',
+          id: 'late',
+          requestId: requestMessage.payload.requestId,
+          data: { name: 'A' },
+          refs: [],
+          versions: [],
+        })
+
+        const remote = await pending
+
+        t.assert.strictEqual(remote.name, 'A')
+      })
+
       await t.test('rejects explicit missing responses when unresolved', async t => {
         const { User } = createContext()
         const { a: bus } = Bus.createPair()
@@ -144,32 +198,6 @@ test('Reactive', async t => {
         } finally {
           delete User.syncTimeoutMs
         }
-      })
-
-      await t.test('waits past missing peer for matching snapshot', async t => {
-        const hub = { peers: [] }
-
-        class Empty extends Reactive {
-          static type = 'multi/User@1'
-        }
-
-        class Source extends Reactive {
-          static type = 'multi/User@1'
-        }
-
-        class Sink extends Reactive {
-          static type = 'multi/User@1'
-        }
-
-        Empty.use(createBroadcastPeer(hub))
-        Source.use(createBroadcastPeer(hub))
-        Sink.use(createBroadcastPeer(hub))
-
-        new Source('multi', { name: 'A' })
-
-        const remote = await Sink.sync('multi')
-
-        t.assert.strictEqual(remote.name, 'A')
       })
 
       await t.test('waits for repair snapshot response before resolving', async t => {
@@ -258,6 +286,124 @@ test('Reactive', async t => {
           city: 'Berlin',
           zip: 'SW1',
         })
+      })
+
+      await t.test('keeps a newer local ancestor over an older remote subtree', async t => {
+        const { User } = createContext()
+        const { a: bus } = Bus.createPair()
+
+        User.use(bus)
+
+        const pending = User.sync('ancestor-merge')
+        const requestMessage = bus.sent.findLast(message =>
+          message.event === 'reactive:snapshot:request' &&
+          message.payload.id === 'ancestor-merge')
+
+        t.assert.ok(requestMessage)
+
+        bus.receive('reactive:delta', {
+          class: 'User',
+          id: 'ancestor-merge',
+          path: ['address'],
+          value: { city: 'Berlin' },
+          version: { tick: 5, context: 'local' },
+        })
+        await Bus.flush()
+
+        bus.receive('reactive:snapshot:response', {
+          class: 'User',
+          data: { address: { city: 'Paris', zip: 'SW1' } },
+          id: 'ancestor-merge',
+          refs: [],
+          requestId: requestMessage.payload.requestId,
+          versions: [{
+            path: ['address'],
+            version: { tick: 3, context: 'remote' },
+          }],
+        })
+
+        const remote = await pending
+
+        t.assert.deepStrictEqual(remote.address, { city: 'Berlin' })
+      })
+
+      await t.test('keeps a newer remote ancestor over an older local subtree', async t => {
+        const { User } = createContext()
+        const { a: bus } = Bus.createPair()
+
+        User.use(bus)
+
+        const pending = User.sync('remote-ancestor')
+        const requestMessage = bus.sent.findLast(message =>
+          message.event === 'reactive:snapshot:request' &&
+          message.payload.id === 'remote-ancestor')
+
+        t.assert.ok(requestMessage)
+
+        bus.receive('reactive:delta', {
+          class: 'User',
+          id: 'remote-ancestor',
+          path: ['address', 'city'],
+          value: 'Berlin',
+          version: { tick: 2, context: 'local' },
+        })
+        await Bus.flush()
+
+        bus.receive('reactive:snapshot:response', {
+          class: 'User',
+          data: { address: { city: 'Paris', zip: 'SW1' } },
+          id: 'remote-ancestor',
+          refs: [],
+          requestId: requestMessage.payload.requestId,
+          versions: [{
+            path: ['address'],
+            version: { tick: 5, context: 'remote' },
+          }],
+        })
+
+        const remote = await pending
+
+        t.assert.deepStrictEqual(remote.address, {
+          city: 'Paris',
+          zip: 'SW1',
+        })
+      })
+
+      await t.test('uses the snapshot value on an equal-version merge', async t => {
+        const { User } = createContext()
+        const { a: bus } = Bus.createPair()
+
+        User.use(bus)
+
+        const pending = User.sync('equal-merge')
+        const requestMessage = bus.sent.at(-1)
+
+        t.assert.ok(requestMessage)
+
+        bus.receive('reactive:delta', {
+          class: 'User',
+          id: 'equal-merge',
+          path: ['name'],
+          value: 'local',
+          version: { tick: 1, context: 'same' },
+        })
+        await Bus.flush()
+
+        bus.receive('reactive:snapshot:response', {
+          class: 'User',
+          id: 'equal-merge',
+          requestId: requestMessage.payload.requestId,
+          data: { name: 'remote' },
+          refs: [],
+          versions: [{
+            path: ['name'],
+            version: { tick: 1, context: 'same' },
+          }],
+        })
+
+        const remote = await pending
+
+        t.assert.strictEqual(remote.name, 'remote')
       })
     })
 
@@ -398,6 +544,42 @@ test('Reactive', async t => {
         t.assert.strictEqual('temp' in right, false)
       })
 
+      await t.test('applies direct top-level deletes', async t => {
+        const { a, bus } = t.ctx
+        const user = new a.User('direct-del', { name: 'John', temp: true })
+
+        bus.a.receive('reactive:delta', {
+          class: 'User',
+          deleted: true,
+          id: 'direct-del',
+          path: ['temp'],
+          version: { tick: 999, context: 'remote' },
+        })
+        await Bus.flush()
+
+        t.assert.strictEqual(user.temp, undefined)
+        t.assert.strictEqual('temp' in user, false)
+      })
+
+      await t.test('applies direct nested deletes', async t => {
+        const { a, bus } = t.ctx
+        const user = new a.User('direct-nested-del', {
+          address: { city: 'London', zip: 'SW1' },
+        })
+
+        bus.a.receive('reactive:delta', {
+          class: 'User',
+          deleted: true,
+          id: 'direct-nested-del',
+          path: ['address', 'city'],
+          version: { tick: 999, context: 'remote' },
+        })
+        await Bus.flush()
+
+        t.assert.strictEqual(user.address.city, undefined)
+        t.assert.strictEqual(user.address.zip, 'SW1')
+      })
+
       await t.test('does not echo back', async t => {
         const { a, b, bus } = t.ctx
         const left = new a.User('echo', { name: 'A' })
@@ -421,6 +603,170 @@ test('Reactive', async t => {
         const right = await b.User.sync('late')
 
         t.assert.strictEqual(right.name, 'B')
+      })
+
+      await t.test('creates arrays for multi-digit index paths', async t => {
+        const { a, bus } = t.ctx
+        const user = new a.User('index-10', { name: 'A' })
+
+        bus.a.receive('reactive:delta', {
+          class: 'User',
+          id: 'index-10',
+          path: ['grid', '10'],
+          value: 'x',
+          version: { tick: 999, context: 'remote' },
+        })
+        await Bus.flush()
+
+        t.assert.ok(Array.isArray(user.grid))
+        t.assert.strictEqual(user.grid[0], undefined)
+        t.assert.strictEqual(user.grid[10], 'x')
+      })
+
+      await t.test('ignores an exact duplicate version on the same path', async t => {
+        const { a, b, bus } = t.ctx
+        const left = new a.User('dup-version', { name: 'A' })
+
+        await b.User.sync('dup-version')
+
+        left.name = 'B'
+        await Bus.flush()
+
+        const deltaMessage = bus.a.sent.findLast(message =>
+          message.event === 'reactive:delta' &&
+          message.payload.id === 'dup-version' &&
+          message.payload.path.at(-1) === 'name')
+
+        t.assert.ok(deltaMessage)
+
+        bus.b.receive('reactive:delta', {
+          class: 'User',
+          id: 'dup-version',
+          path: ['name'],
+          value: 'C',
+          version: deltaMessage.payload.version,
+        })
+        await Bus.flush()
+
+        t.assert.strictEqual(left.name, 'B')
+        t.assert.strictEqual((await b.User.sync('dup-version')).name, 'B')
+      })
+
+      await t.test('ignores deltas from a foreign class', async t => {
+        const { a, bus } = t.ctx
+
+        bus.a.receive('reactive:delta', {
+          class: 'Other',
+          id: 'foreign',
+          path: ['name'],
+          value: 'ghost',
+          version: { tick: 999, context: 'remote' },
+        })
+        await Bus.flush()
+
+        const probe = new a.User('foreign', {})
+
+        t.assert.strictEqual(probe.name, undefined)
+      })
+
+      await t.test('requests repair when op targets a non-array', async t => {
+        const { a, bus } = t.ctx
+        const user = new a.User('non-arr', { tags: 'str' })
+
+        const start = bus.a.sent.length
+
+        bus.a.receive('reactive:delta', {
+          args: ['x'],
+          baseVersion: null,
+          class: 'User',
+          id: 'non-arr',
+          op: 'push',
+          path: ['tags'],
+          version: { tick: 999, context: 'remote' },
+        })
+        await Bus.flush()
+
+        const repairMessage = bus.a.sent
+          .slice(start)
+          .find(message =>
+            message.event === 'reactive:snapshot:request' &&
+            message.payload.id === 'non-arr')
+
+        t.assert.ok(repairMessage)
+        t.assert.strictEqual(user.tags, 'str')
+      })
+
+      await t.test('requests repair when op targets an identified list', async t => {
+        const { a, b, bus } = t.ctx
+        const user = new a.User('id-op', {
+          items: [{ name: 'A' }],
+        })
+
+        await b.User.sync('id-op')
+
+        const start = bus.b.sent.length
+
+        bus.b.receive('reactive:delta', {
+          args: [{ name: 'B' }],
+          baseVersion: null,
+          class: 'User',
+          id: 'id-op',
+          op: 'push',
+          path: ['items'],
+          version: { tick: 999, context: 'remote' },
+        })
+        await Bus.flush()
+
+        const repairMessage = bus.b.sent
+          .slice(start)
+          .find(message =>
+            message.event === 'reactive:snapshot:request' &&
+            message.payload.id === 'id-op')
+
+        t.assert.ok(repairMessage)
+        t.assert.strictEqual(user.items.length, 1)
+      })
+    })
+
+    await t.test('outbound deltas', async t => {
+      await t.test('skip when deleting a missing field', async t => {
+        const { a, bus } = t.ctx
+        const user = new a.User('skip-del', { name: 'A' })
+        const start = bus.a.sent.length
+
+        delete user.absent
+        await Bus.flush()
+
+        const deltaMessage = bus.a.sent
+          .slice(start)
+          .find(message =>
+            message.event === 'reactive:delta' &&
+            message.payload.id === 'skip-del')
+
+        t.assert.strictEqual(deltaMessage, undefined)
+      })
+
+      await t.test('replicate an array element delete as a whole-list set', async t => {
+        const { a, b, bus } = t.ctx
+        const user = new a.User('arr-del', { tags: ['a', 'b', 'c'] })
+        const remote = await b.User.sync('arr-del')
+        const start = bus.a.sent.length
+
+        delete user.tags[1]
+        await Bus.flush()
+
+        const deltaMessage = bus.a.sent
+          .slice(start)
+          .find(message =>
+            message.event === 'reactive:delta' &&
+            message.payload.id === 'arr-del')
+
+        t.assert.ok(deltaMessage)
+        t.assert.deepStrictEqual(deltaMessage.payload.path, ['tags'])
+        t.assert.strictEqual(deltaMessage.payload.deleted, undefined)
+        t.assert.strictEqual(deltaMessage.payload.op, undefined)
+        t.assert.strictEqual(remote.tags.length, 3)
+        t.assert.strictEqual(1 in remote.tags, false)
       })
     })
 
@@ -531,6 +877,68 @@ test('Reactive', async t => {
           zip: '10115',
         })
       })
+
+      await t.test('equal ancestor version still allows a descendant delta', async t => {
+        const { a, bus } = t.ctx
+        const user = new a.User('equal-ancestor', {
+          address: { city: 'A', zip: '1' },
+        })
+
+        user.address = { city: 'Berlin', zip: '10115' }
+        await Bus.flush()
+
+        const deltaMessage = bus.a.sent.findLast(message =>
+          message.event === 'reactive:delta' &&
+          message.payload.id === 'equal-ancestor' &&
+          message.payload.path.length === 1)
+
+        t.assert.ok(deltaMessage)
+
+        bus.a.receive('reactive:delta', {
+          class: 'User',
+          id: 'equal-ancestor',
+          path: ['address', 'city'],
+          value: 'Paris',
+          version: deltaMessage.payload.version,
+        })
+        await Bus.flush()
+
+        t.assert.deepStrictEqual(user.address, {
+          city: 'Paris',
+          zip: '10115',
+        })
+      })
+
+      await t.test('equal descendant version still allows an ancestor delta', async t => {
+        const { a, bus } = t.ctx
+        const user = new a.User('equal-descendant', {
+          address: { city: 'A', zip: '1' },
+        })
+
+        user.address.city = 'Berlin'
+        await Bus.flush()
+
+        const deltaMessage = bus.a.sent.findLast(message =>
+          message.event === 'reactive:delta' &&
+          message.payload.id === 'equal-descendant' &&
+          message.payload.path.length === 2)
+
+        t.assert.ok(deltaMessage)
+
+        bus.a.receive('reactive:delta', {
+          class: 'User',
+          id: 'equal-descendant',
+          path: ['address'],
+          value: { city: 'Paris', zip: '10115' },
+          version: deltaMessage.payload.version,
+        })
+        await Bus.flush()
+
+        t.assert.deepStrictEqual(user.address, {
+          city: 'Paris',
+          zip: '10115',
+        })
+      })
     })
 
     await t.test('arrays', async t => {
@@ -596,6 +1004,42 @@ test('Reactive', async t => {
         )
       })
 
+      await t.test('repair keeps surviving identified edits in snapshot order', async t => {
+        const { a, b, bus } = t.ctx
+        const left = new a.User('repair-filter', {
+          items: [{ name: 'A' }, { name: 'B' }, { name: 'C' }],
+        })
+        const right = await b.User.sync('repair-filter')
+
+        bus.a.drop()
+        left.items.splice(1, 1)
+        await Bus.flush()
+
+        bus.b.drop()
+        right.items[1].name = 'B-right'
+        right.items[2].name = 'C-right'
+        await Bus.flush()
+
+        bus.a.pass()
+        bus.b.pass()
+        bus.b.receive('reactive:delta', {
+          args: ['repair'],
+          baseVersion: { context: 'remote', tick: 999 },
+          class: 'User',
+          id: 'repair-filter',
+          op: 'push',
+          path: ['tags'],
+          version: { context: 'remote', tick: 1000 },
+        })
+        await Bus.flush()
+        await Bus.flush()
+
+        t.assert.deepStrictEqual(
+          right.items.map(item => item.name),
+          ['A', 'C-right', 'B-right']
+        )
+      })
+
       await t.test('emits array op deltas with op and args', async t => {
         const { a, bus } = t.ctx
         const user = new a.User('aop', { tags: ['a'] })
@@ -640,6 +1084,62 @@ test('Reactive', async t => {
         t.assert.strictEqual(deltaMessage.payload.path.length, 3)
         t.assert.strictEqual(deltaMessage.payload.path[2], 'tags')
         t.assert.strictEqual(deltaMessage.payload.op, 'push')
+      })
+
+      await t.test('replicates an index write inside a nested item array', async t => {
+        const { a, b } = t.ctx
+        const left = new a.User('nested-idx', {
+          items: [{ tags: ['a', 'b'] }],
+        })
+        const right = await b.User.sync('nested-idx')
+
+        left.items[0].tags[1] = 'x'
+        await Bus.flush()
+
+        t.assert.deepStrictEqual(right.items[0].tags, ['a', 'x'])
+      })
+
+      await t.test('replicates an item field edit on the receiver', async t => {
+        const { a, b, bus } = t.ctx
+        const left = new a.User('item-field', {
+          items: [{ name: 'A' }, { name: 'B' }],
+        })
+        const right = await b.User.sync('item-field')
+        const start = bus.b.sent.length
+
+        left.items[1].name = 'Y'
+        await Bus.flush()
+
+        const repairMessage = bus.b.sent
+          .slice(start)
+          .find(message =>
+            message.event === 'reactive:snapshot:request' &&
+            message.payload.id === 'item-field')
+
+        t.assert.strictEqual(repairMessage, undefined)
+        t.assert.strictEqual(right.items[1].name, 'Y')
+        t.assert.strictEqual(right.items[0].name, 'A')
+      })
+
+      await t.test('replicates deeper nested array mutators as a whole boundary set', async t => {
+        const { a, b, bus } = t.ctx
+        const left = new a.User('matrix', {
+          matrix: [['a'], ['b']],
+        })
+        const right = await b.User.sync('matrix')
+
+        left.matrix[0].push('x')
+        await Bus.flush()
+
+        const deltaMessage = bus.a.sent.findLast(message =>
+          message.event === 'reactive:delta' &&
+          message.payload.id === 'matrix')
+
+        t.assert.ok(deltaMessage)
+        t.assert.deepStrictEqual(deltaMessage.payload.path, ['matrix'])
+        t.assert.strictEqual(deltaMessage.payload.op, undefined)
+        t.assert.deepStrictEqual(deltaMessage.payload.value, [['a', 'x'], ['b']])
+        t.assert.deepStrictEqual(right.matrix, [['a', 'x'], ['b']])
       })
 
       await t.test('stale ops', async t => {
@@ -792,6 +1292,27 @@ test('Reactive', async t => {
   })
 
   await t.test('#use', async t => {
+    await t.test('accepts rebinding the same class to the same bus', t => {
+      const { User } = createContext()
+      const bus = {
+        on: t.mock.fn(() => () => {}),
+        send: () => {},
+      }
+
+      User.use(bus)
+
+      t.assert.doesNotThrow(() => User.use(bus))
+    })
+
+    await t.test('ignores bus.on handlers that are not functions', async t => {
+      const { User } = createContext()
+      const bus = { on: () => undefined, send: () => {} }
+
+      User.use(bus)
+
+      t.assert.doesNotThrow(() => User.use(null))
+    })
+
     await t.test('tears down previous subscriptions on rebind', async t => {
       const { User } = createContext()
       const unsubscribe = t.mock.fn()
@@ -821,6 +1342,23 @@ test('Reactive', async t => {
       First.use(bus)
 
       t.assert.throws(() => Second.use(bus), /already registered/)
+    })
+
+    await t.test('removes a type from the shared registry on unbind', async t => {
+      const bus = { on: () => () => {}, send: () => {} }
+
+      class First extends Reactive {
+        static type = 'dup/Rebind@1'
+      }
+
+      class Second extends Reactive {
+        static type = 'dup/Rebind@1'
+      }
+
+      First.use(bus)
+      First.use(null)
+
+      t.assert.doesNotThrow(() => Second.use(bus))
     })
 
     await t.test('does not bind classes rejected by duplicate type', async t => {
@@ -860,6 +1398,320 @@ test('Reactive', async t => {
 
       t.assert.strictEqual(sent.length, 0)
       t.assert.strictEqual(new First('leak', {}).name, undefined)
+    })
+  })
+
+  await t.test('#clock', async t => {
+    await t.test('advances past the highest snapshot version tick', async t => {
+      const { User } = createContext()
+      const { a: bus } = Bus.createPair()
+
+      User.use(bus)
+
+      const pending = User.sync('clock-high')
+      const requestMessage = bus.sent.findLast(message =>
+        message.event === 'reactive:snapshot:request' &&
+        message.payload.id === 'clock-high')
+
+      t.assert.ok(requestMessage)
+
+      bus.receive('reactive:snapshot:response', {
+        class: 'User',
+        data: { name: 'A', nick: 'n' },
+        id: 'clock-high',
+        refs: [],
+        requestId: requestMessage.payload.requestId,
+        versions: [
+          { path: ['name'], version: { tick: 100, context: 'remote' } },
+          { path: ['nick'], version: { tick: 50, context: 'remote' } },
+        ],
+      })
+
+      const remote = await pending
+
+      remote.name = 'B'
+
+      const deltaMessage = bus.sent.findLast(message =>
+        message.event === 'reactive:delta' &&
+        message.payload.id === 'clock-high')
+
+      t.assert.ok(deltaMessage)
+      t.assert.ok(deltaMessage.payload.version.tick > 100)
+    })
+  })
+
+  await t.test('#wire shape', async t => {
+    await t.test('plain object assignments carry no $iid on the wire', async t => {
+      const { a, bus } = createLinkedContexts()
+      const user = new a.User('no-iid', { address: { city: 'London' } })
+
+      user.address = { city: 'Berlin', zip: '10115' }
+      await Bus.flush()
+
+      const deltaMessage = bus.a.sent.findLast(message =>
+        message.event === 'reactive:delta' &&
+        message.payload.id === 'no-iid' &&
+        message.payload.path.at(-1) === 'address')
+
+      t.assert.ok(deltaMessage)
+      t.assert.strictEqual(deltaMessage.payload.value.$iid, undefined)
+      t.assert.deepStrictEqual(deltaMessage.payload.value, {
+        city: 'Berlin',
+        zip: '10115',
+      })
+    })
+
+    await t.test('identified-list index writes emit a whole-list set', async t => {
+      const { a, b, bus } = createLinkedContexts()
+      const left = new a.User('idx-set', {
+        items: [{ name: 'A' }, { name: 'B' }],
+      })
+      const right = await b.User.sync('idx-set')
+      const start = bus.a.sent.length
+
+      left.items[0] = { name: 'Z' }
+      await Bus.flush()
+
+      const deltaMessage = bus.a.sent
+        .slice(start)
+        .find(message =>
+          message.event === 'reactive:delta' &&
+          message.payload.id === 'idx-set')
+
+      t.assert.ok(deltaMessage)
+      t.assert.deepStrictEqual(deltaMessage.payload.path, ['items'])
+      t.assert.strictEqual(deltaMessage.payload.op, undefined)
+      t.assert.strictEqual(Array.isArray(deltaMessage.payload.value), true)
+      t.assert.ok(typeof deltaMessage.payload.value[0].$iid === 'string')
+      t.assert.strictEqual(right.items[0].name, 'Z')
+    })
+
+    await t.test('non-identified array ops do not tag args with $iid', async t => {
+      const { a, bus } = createLinkedContexts()
+      const user = new a.User('mixed-push', {
+        mixed: [{ a: 1 }, 'plain'],
+      })
+
+      user.mixed.push({ b: 2 })
+      await Bus.flush()
+
+      const deltaMessage = bus.a.sent.findLast(message =>
+        message.event === 'reactive:delta' &&
+        message.payload.id === 'mixed-push' &&
+        message.payload.op === 'push')
+
+      t.assert.ok(deltaMessage)
+      t.assert.strictEqual(deltaMessage.payload.args[0].$iid, undefined)
+      t.assert.strictEqual(user.mixed.length, 3)
+    })
+
+    await t.test('array ops apply without triggering repair on fresh peers', async t => {
+      const { a, b, bus } = createLinkedContexts()
+      const left = new a.User('op-live', { tags: ['a'] })
+      const right = await b.User.sync('op-live')
+      const start = bus.b.sent.length
+
+      left.tags.push('x')
+      await Bus.flush()
+
+      const repairMessage = bus.b.sent
+        .slice(start)
+        .find(message =>
+          message.event === 'reactive:snapshot:request' &&
+          message.payload.id === 'op-live')
+
+      t.assert.strictEqual(repairMessage, undefined)
+      t.assert.deepStrictEqual([...right.tags], ['a', 'x'])
+    })
+  })
+
+  await t.test('#binding', async t => {
+    await t.test('rejects sync without a bound bus', t => {
+      const { User } = createContext()
+
+      t.assert.throws(() => User.sync('no-bus'), /without a bus/)
+    })
+  })
+
+  await t.test('#handlers', async t => {
+    await t.test('accepts snapshot responses without a refs field', async t => {
+      const { User } = createContext()
+      const { a: bus } = Bus.createPair()
+
+      User.use(bus)
+
+      const pending = User.sync('no-refs')
+      const requestMessage = bus.sent.findLast(message =>
+        message.event === 'reactive:snapshot:request' &&
+        message.payload.id === 'no-refs')
+
+      t.assert.ok(requestMessage)
+
+      bus.receive('reactive:snapshot:response', {
+        class: 'User',
+        data: { name: 'A' },
+        id: 'no-refs',
+        requestId: requestMessage.payload.requestId,
+        versions: [],
+      })
+
+      const remote = await pending
+
+      t.assert.strictEqual(remote.name, 'A')
+    })
+
+    await t.test('skips refs whose class is not registered', async t => {
+      const { User } = createContext()
+      const { a: bus } = Bus.createPair()
+
+      User.use(bus)
+
+      const pending = User.sync('orphan-refs')
+      const requestMessage = bus.sent.findLast(message =>
+        message.event === 'reactive:snapshot:request' &&
+        message.payload.id === 'orphan-refs')
+
+      t.assert.ok(requestMessage)
+
+      bus.receive('reactive:snapshot:response', {
+        class: 'User',
+        data: {
+          name: 'P',
+          external: { $ref: 'Unregistered', id: 'u1' },
+        },
+        id: 'orphan-refs',
+        refs: [{
+          class: 'Unregistered',
+          data: { name: 'stranger' },
+          id: 'u1',
+          versions: [],
+        }],
+        requestId: requestMessage.payload.requestId,
+        versions: [],
+      })
+
+      const remote = await pending
+
+      t.assert.strictEqual(remote.name, 'P')
+      t.assert.deepStrictEqual(remote.external, {
+        $ref: 'Unregistered',
+        id: 'u1',
+      })
+    })
+
+    await t.test('ignores unsolicited snapshot responses', t => {
+      const { User } = createContext()
+      const { a: bus } = Bus.createPair()
+
+      User.use(bus)
+
+      t.assert.doesNotThrow(() =>
+        bus.receive('reactive:snapshot:response', {
+          class: 'User',
+          data: { name: 'A' },
+          id: 'unsolicited',
+          refs: [],
+          requestId: 'x',
+          versions: [],
+        }))
+    })
+
+    await t.test('ignores snapshot responses with a mismatched requestId', async t => {
+      const { User } = createContext()
+      const { a: bus } = Bus.createPair()
+
+      User.syncTimeoutMs = 10
+      User.use(bus)
+
+      try {
+        const pending = User.sync('mis')
+        const requestMessage = bus.sent.findLast(message =>
+          message.event === 'reactive:snapshot:request' &&
+          message.payload.id === 'mis')
+
+        t.assert.ok(requestMessage)
+
+        bus.receive('reactive:snapshot:response', {
+          class: 'User',
+          data: { name: 'A' },
+          id: 'mis',
+          refs: [],
+          requestId: 'different',
+          versions: [],
+        })
+
+        await t.assert.rejects(pending, /Timed out syncing User:mis/)
+      } finally {
+        delete User.syncTimeoutMs
+      }
+    })
+
+    await t.test('ignores snapshot requests for foreign classes', async t => {
+      const { a, b, bus } = createLinkedContexts()
+
+      new a.User('mixed', { name: 'A' })
+      await b.User.sync('mixed')
+
+      const postResponses = bus.a.sent.filter(message =>
+        message.event === 'reactive:snapshot:response' &&
+        message.payload.class === 'Post' &&
+        message.payload.id === 'mixed')
+
+      t.assert.strictEqual(postResponses.length, 0)
+    })
+
+    await t.test('ignores snapshot responses from foreign classes', async t => {
+      const { User } = createContext()
+      const { a: bus } = Bus.createPair()
+
+      User.syncTimeoutMs = 10
+      User.use(bus)
+
+      try {
+        const pending = User.sync('foreign')
+        const requestMessage = bus.sent.findLast(message =>
+          message.event === 'reactive:snapshot:request' &&
+          message.payload.id === 'foreign')
+
+        t.assert.ok(requestMessage)
+
+        bus.receive('reactive:snapshot:response', {
+          class: 'Other',
+          data: { name: 'A' },
+          id: 'foreign',
+          refs: [],
+          requestId: requestMessage.payload.requestId,
+          versions: [],
+        })
+
+        await t.assert.rejects(pending, /Timed out syncing User:foreign/)
+      } finally {
+        delete User.syncTimeoutMs
+      }
+    })
+
+    await t.test('versions subtree cleared after ancestor write', async t => {
+      const { a, b, bus } = createLinkedContexts()
+      const user = new a.User('subtree', {
+        address: { city: 'London', zip: 'SW1' },
+      })
+
+      user.address.city = 'Paris'
+      user.address = { city: 'Berlin', zip: '10115' }
+      await Bus.flush()
+      await b.User.sync('subtree')
+
+      const responseMessage = bus.a.sent.findLast(message =>
+        message.event === 'reactive:snapshot:response' &&
+        message.payload.id === 'subtree')
+
+      t.assert.ok(responseMessage)
+
+      const paths = responseMessage.payload.versions.map(entry =>
+        entry.path.join('/'))
+
+      t.assert.ok(paths.includes('address'))
+      t.assert.strictEqual(paths.includes('address/city'), false)
     })
   })
 })
