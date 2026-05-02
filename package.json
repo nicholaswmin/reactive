@@ -1,6 +1,6 @@
 {
   "name": "@nicholaswmin/reactive",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Replicated reactive models with native ergonomics and efficient updates",
   "license": "MIT",
   "type": "module",
