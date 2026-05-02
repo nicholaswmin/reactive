@@ -24,14 +24,6 @@ src/
     Proxy traps, hydrate, delta emit/apply, Reactive class
 ```
 
-Docs:
-
-```text
-docs/
-└── spec.md
-    behavioural spec
-```
-
 Tests:
 
 ```text
@@ -218,4 +210,4 @@ Cover at minimum:
 - No comments unless the logic is non-obvious.
 - No docstrings.
 - No type annotations.
-- Keep `README.md` and `docs/spec.md` in sync with behavior.
+- Keep `README.md` and `AGENTS.md` in sync with behavior.

@@ -3,4 +3,5 @@ node_modules
 .codex/
 .stryker-tmp/
 *.log
+!AGENTS.md
 !SECURITY.md
