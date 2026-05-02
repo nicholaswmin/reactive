@@ -21,7 +21,7 @@ import {
 } from './identity.js'
 import {
   isIndexKey, pathKey, valueAtPath, setAtPath, deleteAtPath,
-  resolvePathExists, samePath,
+  resolveIdentifiedItemExists, samePath,
 } from './path.js'
 import {
   compareVersion, versionAt, newerAncestor, newerDescendant,
@@ -415,7 +415,7 @@ const canApplyRemote = (record, path, version) => {
   )
     return false
 
-  if (!resolvePathExists(record.target, path)) {
+  if (!resolveIdentifiedItemExists(record.target, path)) {
     requestRepair(record)
     return false
   }

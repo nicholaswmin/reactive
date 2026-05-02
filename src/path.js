@@ -61,7 +61,7 @@ const deleteAtPath = (target, path) => {
     delete parent[path.at(-1)]
 }
 
-const resolvePathExists = (target, path) => {
+const resolveIdentifiedItemExists = (target, path) => {
   let cursor = target
 
   for (let i = 0; i < path.length - 1; i++) {
@@ -89,5 +89,5 @@ export {
   valueAtPath,
   setAtPath,
   deleteAtPath,
-  resolvePathExists,
+  resolveIdentifiedItemExists,
 }

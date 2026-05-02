@@ -58,7 +58,7 @@ export class Generator {
     this.words = this.word()
     this.zips = this.zip()
     this.names = this.name()
-    this.tags = this.tags()
+    this.tags = this.tagList()
   }
 
   bool() {
@@ -78,7 +78,7 @@ export class Generator {
       yield `${this.words.next().value}-${this.int(1000)}`
   }
 
-  *tags() {
+  *tagList() {
     while (true)
       yield Array.from(
         { length: 1 + this.int(4) },
