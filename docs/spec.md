@@ -103,6 +103,7 @@ Implementation spec for the current runtime.
 ## Verification
 
 - `.github/CONTRIBUTING.md` is the canonical testing guide.
+- Model-only debugging can run with `node --test test/model.test.js`.
 - Behavior changes must be covered by `node:test` tests using the
   existing fixtures.
 - Protocol changes must cover local behavior, one-way replication,
@@ -110,3 +111,5 @@ Implementation spec for the current runtime.
   arrays when arrays are touched.
 - Model tests compare live `Reactive` state against a plain-object model
   with `t.assert.models(...)`.
+- `test/model.test.js` explicitly installs that assertion with
+  `Generator.Assertions()`.

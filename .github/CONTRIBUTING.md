@@ -154,6 +154,7 @@ user.tags.push('x')
 Run:
 
 ```sh
+node --test test/model.test.js
 npm test
 npm run test:cov
 npm run test:mut -- --dryRunOnly
@@ -187,7 +188,7 @@ Model tests:
 
 - `test/model.test.js` uses a plain-object model as the oracle.
 - `test/utils/prop/index.js` provides the seeded `Generator`.
-- `Generator.Assertions()` installs model assertions.
+- `test/model.test.js` explicitly calls `Generator.Assertions()`.
 - Use `t.assert.models(actual, expected, info)` for generated
   state checks.
 - Pass `seed`, `step`, `command`, and `side` when they apply.
